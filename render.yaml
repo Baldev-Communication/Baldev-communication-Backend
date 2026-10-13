@@ -35,7 +35,7 @@ services:
       - key: AUTH_COOKIE_SECURE
         value: "true"
       - key: PUBLIC_API_URL
-        value: https://baldev-communication-backend-1.onrender.com
+        value: https://baldev-communication-backend.onrender.com
       - key: CLIENT_ORIGINS
         sync: false
       - key: FRONTEND_URL

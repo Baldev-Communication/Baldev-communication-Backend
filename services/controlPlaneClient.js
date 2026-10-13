@@ -50,20 +50,23 @@ function parseAndVerify(envelope, config) {
 }
 
 async function saveEnvelope(envelope, config) {
-  memoryEnvelope = envelope;
+  memoryEnvelope = { installationId: config.installationId, envelope };
+  const key = `active:${config.installationId}`;
   await RuntimeLicense.findOneAndUpdate(
-    { key: 'active' },
-    { $set: { installationId: config.installationId, payload: envelope.payload, signature: envelope.signature, algorithm: envelope.algorithm, checkedAt: new Date() }, $setOnInsert: { key: 'active' } },
+    { key },
+    { $set: { installationId: config.installationId, payload: envelope.payload, signature: envelope.signature, algorithm: envelope.algorithm, checkedAt: new Date() }, $setOnInsert: { key } },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   ).catch(() => null);
 }
 
-async function cachedEnvelope() {
-  if (memoryEnvelope) return memoryEnvelope;
-  const cached = await RuntimeLicense.findOne({ key: 'active' }).lean().catch(() => null);
+async function cachedEnvelope(config) {
+  if (memoryEnvelope?.installationId === config.installationId) return memoryEnvelope.envelope;
+  const cached = await RuntimeLicense.findOne({ key: `active:${config.installationId}` }).lean().catch(() => null)
+    || await RuntimeLicense.findOne({ key: 'active', installationId: config.installationId }).lean().catch(() => null);
   if (!cached) return null;
-  memoryEnvelope = { payload: cached.payload, signature: cached.signature, algorithm: cached.algorithm };
-  return memoryEnvelope;
+  const envelope = { payload: cached.payload, signature: cached.signature, algorithm: cached.algorithm };
+  memoryEnvelope = { installationId: config.installationId, envelope };
+  return envelope;
 }
 
 function applyLocalExpiry(status) {
@@ -95,10 +98,19 @@ async function remote(path, body = {}) {
 async function licenseStatus({ force = false } = {}) {
   const config = configuration();
   if (!config.managed) return { managed: false, source: 'unmanaged', status: 'ACTIVE', plan: 'SELF_HOSTED', features: [], limits: {}, appVersion: config.appVersion };
-  const cached = await cachedEnvelope();
-  if (cached && !force) {
-    const payload = parseAndVerify(cached, config);
-    if (new Date(payload.validUntil).getTime() > Date.now()) return applyLocalExpiry({ managed: true, source: 'cache', ...payload });
+  let cachedPayload;
+  const cached = await cachedEnvelope(config);
+  if (cached) {
+    try { cachedPayload = parseAndVerify(cached, config); }
+    catch (error) {
+      // A rotated signing key or an older installation must not prevent a
+      // fresh validation from replacing its unusable cached response.
+      if (error.errorCode !== 'UNAUTHORIZED') throw error;
+      memoryEnvelope = undefined;
+    }
+    if (!force && cachedPayload && new Date(cachedPayload.validUntil).getTime() > Date.now()) {
+      return applyLocalExpiry({ managed: true, source: 'cache', ...cachedPayload });
+    }
   }
   try {
     if (!refreshPromise) refreshPromise = (async () => {
@@ -110,9 +122,8 @@ async function licenseStatus({ force = false } = {}) {
     const payload = await refreshPromise;
     return applyLocalExpiry({ managed: true, source: 'platform', ...payload });
   } catch (error) {
-    if (cached) {
-      const payload = parseAndVerify(cached, config);
-      if (new Date(payload.graceUntil).getTime() > Date.now()) return applyLocalExpiry({ managed: true, source: 'offline-cache', platformReachable: false, ...payload });
+    if (cachedPayload && new Date(cachedPayload.graceUntil).getTime() > Date.now()) {
+      return applyLocalExpiry({ managed: true, source: 'offline-cache', platformReachable: false, ...cachedPayload });
     }
     throw error;
   }
