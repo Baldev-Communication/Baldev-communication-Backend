@@ -23,6 +23,7 @@ const { ApiError } = require('../utils/apiError');
 const { supportsTransactions, runInTransaction } = require('../utils/transaction');
 const { runUploadRequest } = require('../services/uploadRetryService');
 const { storeFiles } = require('../services/mediaUploadService');
+const { compressDraftUploads } = require('../services/draftImageCompression');
 const { createRecordOnce } = require('../services/recordCreationService');
 
 const DRAFT_AUDIT_FIELDS = [
@@ -57,7 +58,7 @@ exports.bulkUploadMiddleware = multer({
     if (!allowedTypes.includes(file.mimetype)) return cb(new Error('Only jpg, jpeg, png and webp images are allowed'));
     cb(null, true);
   },
-  limits: { fileSize: 2 * 1024 * 1024, files: 30 },
+  limits: { fileSize: 20 * 1024 * 1024, files: 30 },
 });
 
 exports.bulkUpload = async (req, res, next) => {
@@ -67,6 +68,7 @@ exports.bulkUpload = async (req, res, next) => {
     if (!isR2Configured() && !isCloudinaryConfigured() && process.env.NODE_ENV === 'production' && !isLocalRequest(req)) {
       throw new ApiError('PERSISTENT_UPLOAD_STORAGE_REQUIRED', 'Draft images need Cloudflare R2 or Cloudinary in production.', { statusCode: 503 });
     }
+    if (!resume) await compressDraftUploads(req.files);
     const result = await runUploadRequest(req, async context => {
       const uploaded = context.resume ? context.storedFiles : await storeFiles(req, context, { folder: 'products' });
       const groupMode = (context.fields || req.body)?.groupMode === 'single' ? 'single' : 'separate';

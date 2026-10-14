@@ -70,13 +70,23 @@ exports.fill = asyncHandler(async (req, res) => {
         suggestion.fieldSources['attribute.' + attribute.key] = { source: 'caption', quote: match[0].trim() };
       }
     }
+    if (attributes.some(attribute => attribute.key === 'brand') && suggestion.brand && suggestion.fieldSources?.brand
+      && !suggestion.attributeValues.brand) {
+      suggestion.attributeValues.brand = suggestion.brand;
+      suggestion.fieldSources['attribute.brand'] = suggestion.fieldSources.brand;
+    }
+    if (attributes.some(attribute => attribute.key === 'country_of_origin') && suggestion.countryOfOrigin
+      && suggestion.fieldSources?.countryOfOrigin && !suggestion.attributeValues.country_of_origin) {
+      suggestion.attributeValues.country_of_origin = suggestion.countryOfOrigin;
+      suggestion.fieldSources['attribute.country_of_origin'] = suggestion.fieldSources.countryOfOrigin;
+    }
     if (suggestion.contextStatus === 'failed') warnings.push(suggestion.contextError);
     if (!enabled()) warnings.push('Photo AI is not configured. These suggestions use only the details stated in your notes and form.');
     if (suggestion.priceAmbiguous || suggestion.multipleProducts) warnings.push('More than one price or product may be present. Confirm the product and enter its price manually.');
     if (configuration.structure.features?.sizing === false) { delete suggestion.sizes; delete suggestion.sizingMode; delete suggestion.sizeChart; }
     // Only listing data is returned. No credentials, model configuration or
     // provider responses are included, and nothing is saved or published here.
-    const fields = ['name', 'category', 'subCategory', 'description', 'shortDescription', 'colors', 'tags', 'highlights', 'fabric', 'occasion', 'sizes', 'sizingMode', 'price', 'originalPrice', 'attributeValues'];
+    const fields = ['name', 'brand', 'category', 'subCategory', 'description', 'shortDescription', 'colors', 'tags', 'highlights', 'fabric', 'occasion', 'sizes', 'sizingMode', 'price', 'originalPrice', 'countryOfOrigin', 'packageDimensions', 'shippingWeightKg', 'attributeValues'];
     const data = Object.fromEntries(fields.filter(field => suggestion[field] !== undefined).map(field => [field, suggestion[field]]));
     res.json({ suggestion: data, fieldSources: suggestion.fieldSources || {}, mode: suggestion.contextStatus === 'completed' ? 'ai' : 'notes', warnings: [...new Set(warnings)] });
   } catch (error) {

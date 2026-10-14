@@ -29,6 +29,21 @@ test('visual suggestions map a saree to the real category and free-size behavior
   assert.equal(result.analysis.model, 'gemini-test');
 });
 
+test('photo AI accepts readable brand and parcel labels but rejects guesses', () => {
+  const labelled = normalizeVisionSuggestion({ name: 'Nova Charger', brand: 'Nova',
+    packageDimensions: { lengthCm: 30, widthCm: 20, heightCm: 5 }, shippingWeightKg: 0.45,
+    fieldSources: { brand: 'Brand: Nova', packageDimensions: 'Package dimensions: 30 x 20 x 5 cm', shippingWeightKg: 'Packed weight: 450 g' } });
+  assert.equal(labelled.suggestion.brand, 'Nova');
+  assert.equal(labelled.suggestion.packageDimensions.heightCm, 5);
+  assert.equal(labelled.suggestion.shippingWeightKg, 0.45);
+  const guessed = normalizeVisionSuggestion({ name: 'Nova Charger', brand: 'Nova',
+    packageDimensions: { lengthCm: 30, widthCm: 20, heightCm: 5 }, shippingWeightKg: 0.45,
+    fieldSources: { brand: 'Looks like a popular brand', packageDimensions: 'Product is 30 x 20 x 5 cm', shippingWeightKg: 'Looks light' } });
+  assert.equal(guessed.suggestion.brand, undefined);
+  assert.equal(guessed.suggestion.packageDimensions, undefined);
+  assert.equal(guessed.suggestion.shippingWeightKg, undefined);
+});
+
 test('candidate mapping keeps inferred catalog data but never creates price, stock, or sizes', () => {
   const result = toCandidateAnalysis({
     enabled: true,

@@ -19,10 +19,16 @@ const mongoose = require('mongoose');
 // Tests may deliberately override these after importing the harness. Never
 // inherit production delivery/storage credentials from the caller's shell.
 for (const key of Object.keys(process.env)) {
-  if (/^(MONGO_URI|JWT|OTP|SMS|TWILIO|MSG91|TWOFACTOR|FAST2SMS|BREVO|RAZORPAY|R2_|CLOUDINARY|REDIS|GEMINI|AI_|SOCIAL_|META_|INSTAGRAM|FACEBOOK|SHIPROCKET|SHIPPING_|WHATSAPP|PUSH_|PAYMENTS_|ADMIN_PHONE|MASTER_OWNER)/i.test(key)) delete process.env[key];
+  if (/^(MONGO_URI|JWT|OTP|SMS|TWILIO|MSG91|TWOFACTOR|FAST2SMS|BREVO|RAZORPAY|R2_|CLOUDINARY|REDIS|GEMINI|AI_|SOCIAL_|META_|INSTAGRAM|FACEBOOK|SHIPROCKET|SHIPPING_|WHATSAPP|PUSH_|PAYMENTS_|ADMIN_PHONE|MASTER_OWNER|CONTROL_PLANE|CLIENT_INSTALLATION|CLIENT_LICENSE|LICENSE_SIGNING)/i.test(key)) delete process.env[key];
 }
+const testInstallationId = 'automated-test-installation';
+const testLicenseKeys = crypto.generateKeyPairSync('ed25519');
 Object.assign(process.env, {
   NODE_ENV: 'test',
+  CONTROL_PLANE_URL: 'http://127.0.0.1:1',
+  CLIENT_INSTALLATION_ID: testInstallationId,
+  CLIENT_LICENSE_KEY: 'automated-test-key',
+  LICENSE_SIGNING_PUBLIC_KEY: testLicenseKeys.publicKey.export({ format: 'der', type: 'spki' }).toString('base64'),
   JWT_SECRET: 'test_jwt_secret',
   JWT_REFRESH_SECRET: 'test_jwt_refresh_secret',
   OTP_MODE: 'demo', DEMO_OTP: '123456', OTP_RESEND_COOLDOWN_SECONDS: '0',
@@ -87,6 +93,7 @@ async function startTestEnvironment() {
   }
 
   process.env.MONGO_URI = uri;
+  await seedTestLicense();
 
   const app = require('../app');
   await new Promise((resolve) => {
@@ -98,18 +105,33 @@ async function startTestEnvironment() {
 
 async function stopTestEnvironment() {
   if (server) await new Promise((resolve) => server.close(resolve));
-  await resetDatabase().catch(() => null);
+  await resetDatabase(false).catch(() => null);
   await mongoose.disconnect();
   if (replSet) await replSet.stop();
 }
 
-async function resetDatabase() {
+async function resetDatabase(seedLicense = true) {
   if (mongoose.connection.readyState !== 1) return;
   if (mongoose.connection.name !== TEST_DB_NAME) {
     throw new Error('Refusing test cleanup outside the dedicated automated-test database.');
   }
   const { collections } = mongoose.connection;
   await Promise.all(Object.values(collections).map((collection) => collection.deleteMany({})));
+  if (seedLicense) await seedTestLicense();
+}
+
+async function seedTestLicense() {
+  const payload = Buffer.from(JSON.stringify({
+    installationId: testInstallationId, status: 'ACTIVE', plan: 'AUTOMATED_TEST',
+    features: ['analytics', 'aiProduct', 'socialImport', 'socialStudio', 'businessAssistant', 'abandonedCart', 'crm', 'festival', 'advancedCustomization', 'shippingAutomation'],
+    limits: {}, validUntil: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    graceUntil: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+  })).toString('base64url');
+  const signature = crypto.sign(null, Buffer.from(payload), testLicenseKeys.privateKey).toString('base64url');
+  await require('../models/RuntimeLicense').updateOne({ key: 'active:' + testInstallationId }, {
+    $set: { installationId: testInstallationId, payload, signature, algorithm: 'Ed25519', checkedAt: new Date() },
+    $setOnInsert: { key: 'active:' + testInstallationId },
+  }, { upsert: true });
 }
 
 async function request(path, { method = 'GET', body, token, headers = {} } = {}) {

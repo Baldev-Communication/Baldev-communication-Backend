@@ -117,18 +117,20 @@ test('bulk-uploaded draft photos remain available through editing and publicatio
   const filePath = path.resolve(__dirname, '..', 'uploads', path.basename(new URL(draft.image, getBaseUrl()).pathname));
   assert.equal(path.basename(filePath).includes(marker), true);
   t.after(() => fs.unlink(filePath).catch(() => null));
-  assert.deepEqual(await fs.readFile(filePath), image, 'the draft photo must not be deleted as a temporary upload');
+  const optimized = await fs.readFile(filePath);
+  assert.equal((await require('sharp')(optimized).metadata()).format, 'webp');
+  assert.ok(optimized.length <= 700 * 1024, 'the draft photo should be compressed before storage');
   assert.equal((await request('/api/admin/product-drafts', { token: admin.token })).data.data.length, 1);
   assert.equal((await request(`/api/admin/product-drafts/${draft._id}`, { token: admin.token })).data.data.image, draft.image);
   const category = await require('../models/Category').create({ name: 'Sarees', slug: 'bulk-sarees' });
-  const edited = await request(`/api/admin/product-drafts/${draft._id}`, { method: 'PUT', token: admin.token, body: { name: 'Rose Silk Saree', category: String(category._id), price: 799, sellingPrice: 799, originalPrice: 999, stock: 4, sizingMode: 'free-size', colors: ['Rose'] } });
+  const edited = await request(`/api/admin/product-drafts/${draft._id}`, { method: 'PUT', token: admin.token, body: { name: 'Rose Silk Saree', brand: 'Baldev Communication', attributeValues: { brand: 'Baldev Communication', model: 'TEST-1', condition: 'New', warranty: 'No warranty' }, category: String(category._id), price: 799, sellingPrice: 799, originalPrice: 999, stock: 4, sizingMode: 'free-size', colors: ['Rose'] } });
   assert.equal(edited.status, 200, JSON.stringify(edited.data));
   const published = await request('/api/admin/product-drafts/publish-selected', { method: 'POST', token: admin.token, body: { ids: [draft._id] } });
   assert.equal(published.status, 200, JSON.stringify(published.data));
   assert.equal(published.data.data.products[0].name, 'Rose Silk Saree');
   const served = await fetch(`${getBaseUrl()}${new URL(draft.image, getBaseUrl()).pathname}`);
   assert.equal(served.status, 200);
-  assert.deepEqual(Buffer.from(await served.arrayBuffer()), image);
+  assert.deepEqual(Buffer.from(await served.arrayBuffer()), optimized);
 });
 
 test('quick photo analysis sends the actual uploaded image, maps categories and leaves commercial fields manual', async (t) => {

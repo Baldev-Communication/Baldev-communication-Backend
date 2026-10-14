@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { generateGeminiJson } = require('./geminiJson.service');
+const { statedCatalogDetails } = require('./productImportContext.service');
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 
@@ -77,25 +78,28 @@ function asList(value) {
 function buildPrompt(categories, subcategories, imageCount = 1) {
   const categoryNames = categories.map((item) => item.name).filter(Boolean).slice(0, 40);
   return [
-    'You are a fashion catalog assistant for an Indian clothing boutique (sarees, lehengas, suits, kurtis, gowns, tops, skirts, jumpsuits).',
-    `Look carefully at the ${imageCount > 1 ? `${imageCount} photos of the same product` : 'product photo'}. Identify the garment from what you see — do not use any filename.`,
+    'You are a catalog assistant for an Indian online store. Products may include electronics, accessories, clothing or other goods.',
+    `Look carefully at the ${imageCount > 1 ? `${imageCount} photos of the same product` : 'product photo'}. Identify the main product from what you see — do not use any filename.`,
     'Return JSON only.',
     'Rules:',
-    '- name: short shoppable title from what is visible (color + garment type + notable detail). Example: "Wine Embroidered Anarkali Suit".',
+    '- name: short shoppable title from the visible product, including readable brand and model when present.',
     '- categoryName: pick the closest match from the store category list when possible.',
     '- subCategory: only if it clearly fits a listed subcategory, otherwise empty.',
-    '- colors: visible garment colors only.',
-    '- pattern: visible pattern or surface work such as embroidered, floral, solid, printed, zari, sequinned. Leave empty if unclear.',
-    '- fabric: only if visually likely (silk sheen, cotton weave, georgette drape). Leave empty if unsure.',
-    '- occasion: only if styling clearly suggests one (wedding, festive, casual, party). Leave empty if unsure.',
+    '- colors: visible product colors only.',
+    '- pattern: visible finish, print or surface work. Leave empty if unclear.',
+    '- fabric: only for textile products when visually likely. Leave empty for electronics or uncertain materials.',
+    '- occasion: only for apparel or gifts when styling clearly suggests one. Leave empty otherwise.',
     '- tags: 2-6 short searchable words from what you see.',
     '- shortDescription: one line for the product card.',
-    '- description: 1-2 sentences describing the visible garment. No invented care claims, no price, no stock.',
+    '- description: 1-2 sentences describing the visible product. No invented claims, price or stock.',
+    '- brand and countryOfOrigin: only when clearly readable on the product or packaging; otherwise empty. Quote the exact visible text in fieldSources.',
+    '- packageDimensions: only for explicitly printed packed parcel length, width and height. Convert to centimetres; never use image pixel dimensions or garment measurements.',
+    '- shippingWeightKg: only for an explicitly printed packed parcel weight. Convert grams to kilograms.',
     '- confidence values must be numbers from 0 to 1. Use a lower score whenever a detail is uncertain.',
-    '- Never guess price, stock, SKU, measurements or which sizes are available.',
+    '- Never guess price, stock, SKU, brand, package dimensions, packed weight or which sizes are available.',
     `Store categories: ${categoryNames.join(', ') || 'none'}.`,
     `Known subcategories: ${(subcategories || []).slice(0, 40).join(', ') || 'none'}.`,
-    'JSON shape: {"name":"","categoryName":"","subCategory":"","colors":[],"pattern":"","fabric":"","occasion":"","tags":[],"shortDescription":"","description":"","confidence":{"name":0,"category":0,"color":0,"pattern":0,"fabric":0,"occasion":0,"overall":0}}',
+    'JSON shape: {"name":"","brand":"","countryOfOrigin":"","packageDimensions":{"lengthCm":null,"widthCm":null,"heightCm":null},"shippingWeightKg":null,"fieldSources":{"brand":"","countryOfOrigin":"","packageDimensions":"","shippingWeightKg":""},"categoryName":"","subCategory":"","colors":[],"pattern":"","fabric":"","occasion":"","tags":[],"shortDescription":"","description":"","confidence":{"name":0,"category":0,"color":0,"pattern":0,"fabric":0,"occasion":0,"overall":0}}',
   ].join(' ');
 }
 
@@ -137,9 +141,21 @@ function normalizeVisionSuggestion(raw = {}, safeCategories = [], model = '') {
   const matched = matchCategory(safeCategories, raw.categoryName);
   const name = clip(raw.name, 120);
   if (!name) {
-    throw new Error('Could not identify this garment from the photo. Try a clearer front-facing product shot.');
+    throw new Error('Could not identify this product from the photo. Try a clearer front-facing product shot.');
   }
   const colors = asList(raw.colors);
+  const stated = Object.fromEntries(['brand', 'countryOfOrigin', 'packageDimensions', 'shippingWeightKg']
+    .map(key => [key, statedCatalogDetails(clip(raw.fieldSources?.[key]?.quote || raw.fieldSources?.[key], 240))]));
+  const brand = clip(raw.brand, 120);
+  const countryOfOrigin = clip(raw.countryOfOrigin, 120);
+  const dimensions = raw.packageDimensions;
+  const verifiedDimensions = stated.packageDimensions.packageDimensions;
+  const keys = ['lengthCm', 'widthCm', 'heightCm'];
+  const packageDimensions = verifiedDimensions && dimensions && keys.every(key => Number(dimensions[key]) > 0
+    && Math.abs(Number(dimensions[key]) - verifiedDimensions[key]) < 0.11) ? verifiedDimensions : undefined;
+  const weight = Number(raw.shippingWeightKg);
+  const shippingWeightKg = stated.shippingWeightKg.shippingWeightKg && weight > 0
+    && Math.abs(weight - stated.shippingWeightKg.shippingWeightKg) < 0.011 ? weight : undefined;
   const rawConfidence = raw.confidence && typeof raw.confidence === 'object' ? raw.confidence : {};
   const knownScores = [
     confidenceValue(rawConfidence.name, name ? 0.7 : 0),
@@ -165,6 +181,10 @@ function normalizeVisionSuggestion(raw = {}, safeCategories = [], model = '') {
   return {
     suggestion: {
       name,
+      ...(brand && stated.brand.brand?.toLowerCase() === brand.toLowerCase() ? { brand } : {}),
+      ...(countryOfOrigin && stated.countryOfOrigin.countryOfOrigin?.toLowerCase() === countryOfOrigin.toLowerCase() ? { countryOfOrigin } : {}),
+      ...(packageDimensions ? { packageDimensions } : {}),
+      ...(shippingWeightKg ? { shippingWeightKg } : {}),
       categoryId: matched?._id ? String(matched._id) : '',
       categoryName: matched?.name || '',
       subCategory: clip(raw.subCategory, 80),

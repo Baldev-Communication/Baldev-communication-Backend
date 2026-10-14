@@ -45,15 +45,20 @@ test('catalog Smart Fill controller scopes categories, returns notes fallback an
   t.after(() => { if (previous !== undefined) process.env.GEMINI_API_KEY = previous; });
   let query;
   t.mock.method(Category, 'find', value => { query = value; return { select() { return this; }, limit() { return this; }, lean: async () => categories }; });
-  t.mock.method(Configuration, 'findById', () => ({ lean: async () => ({ structure: { features: { sizing: true }, attributes: [{ key: 'lining', label: 'Lining material' }] } }) }));
+  t.mock.method(Configuration, 'findById', () => ({ lean: async () => ({ structure: { features: { sizing: true }, attributes: [{ key: 'lining', label: 'Lining material' }, { key: 'brand', label: 'Brand' }, { key: 'country_of_origin', label: 'Country of origin' }] } }) }));
   const write = t.mock.method(Product, 'create', () => { throw new Error('Must never create products'); });
   const res = new EventEmitter(); res.json = value => { res.body = value; res.writableEnded = true; };
   let error;
-  await controller.fill({ user: { _id: 'admin-test' }, tenantFilter: { storeId: 'store-test' }, body: { notes: 'Name: Wine Saree\nFabric: Cotton\nPrice: 899\nShipping: Rs 99\nLining material: Cotton', existing: { stock: 100, price: 500, apiKey: 'never-send' }, imageUrls: [] } }, res, value => { error = value; });
+  await controller.fill({ user: { _id: 'admin-test' }, tenantFilter: { storeId: 'store-test' }, body: { notes: 'Name: Wine Saree\nBrand: Nova\nCountry of origin: India\nPackage dimensions: 30 x 20 x 5 cm\nPacked weight: 450 g\nFabric: Cotton\nPrice: 899\nShipping: Rs 99\nLining material: Cotton', existing: { stock: 100, price: 500, apiKey: 'never-send' }, imageUrls: [] } }, res, value => { error = value; });
   assert.equal(error, undefined); assert.ok(JSON.stringify(query).includes('store-test'));
   assert.equal(res.body.mode, 'notes'); assert.equal(res.body.suggestion.price, 899);
   assert.equal(res.body.suggestion.category, 'sarees'); assert.equal(res.body.suggestion.stock, undefined);
   assert.equal(res.body.suggestion.attributeValues.lining, 'Cotton');
+  assert.equal(res.body.suggestion.brand, 'Nova');
+  assert.equal(res.body.suggestion.attributeValues.brand, 'Nova');
+  assert.equal(res.body.suggestion.attributeValues.country_of_origin, 'India');
+  assert.deepEqual(res.body.suggestion.packageDimensions, { lengthCm: 30, widthCm: 20, heightCm: 5 });
+  assert.equal(res.body.suggestion.shippingWeightKg, 0.45);
   assert.equal(write.mock.callCount(), 0); assert.equal(res.listenerCount('close'), 0);
   assert.ok(!JSON.stringify(res.body).includes('never-send'));
 });
@@ -103,6 +108,29 @@ test('fabric, sizes, measurements and custom fields require stated evidence', ()
   assert.equal(value.category, 'kurtis'); assert.equal(value.sizeChart.rows[0].bust, 38); assert.equal(value.sizeChart.rows[0].invented, undefined);
   assert.deepEqual(value.attributeValues, { lining: 'Cotton' });
   assert.equal(normalizeContext({ ...raw, fieldSources: { price: { source: 'caption', quote: '₹1299' } } }, { categories, caption: 'No price here' }).price, undefined);
+});
+
+test('brand and parcel facts require explicit matching text, never visual estimates', () => {
+  const caption = 'Name: Nova Linen Kurti\nBrand: Nova\nPackage dimensions: 30 x 20 x 5 cm\nPacked weight: 450 g\nCountry of origin: India';
+  const notes = captionSuggestion(caption, '', categories);
+  assert.equal(notes.brand, 'Nova');
+  assert.deepEqual(notes.packageDimensions, { lengthCm: 30, widthCm: 20, heightCm: 5 });
+  assert.equal(notes.shippingWeightKg, 0.45);
+  assert.equal(notes.countryOfOrigin, 'India');
+  assert.equal(captionSuggestion('Name: Nova Charger\nMade in India\nPackage dimensions 30 x 20 x 5 cm', '', categories).countryOfOrigin, 'India');
+  assert.equal(notes.fieldSources.packageDimensions.source, 'caption');
+  const accepted = normalizeContext({ ...raw, brand: 'Nova', packageDimensions: { lengthCm: 30, widthCm: 20, heightCm: 5 }, shippingWeightKg: 0.45,
+    fieldSources: { brand: { source: 'on_screen', quote: 'Brand: Nova' }, packageDimensions: { source: 'on_screen', quote: 'Package dimensions: 30 x 20 x 5 cm' },
+      shippingWeightKg: { source: 'on_screen', quote: 'Packed weight: 450 g' } } }, { categories });
+  assert.equal(accepted.brand, 'Nova');
+  assert.equal(accepted.packageDimensions.widthCm, 20);
+  assert.equal(accepted.shippingWeightKg, 0.45);
+  const rejected = normalizeContext({ ...raw, brand: 'Invented', packageDimensions: { lengthCm: 30, widthCm: 20, heightCm: 5 }, shippingWeightKg: 0.45,
+    fieldSources: { brand: { source: 'visual', quote: 'Looks branded' }, packageDimensions: { source: 'on_screen', quote: 'Dress size: 30 x 20 x 5 cm' },
+      shippingWeightKg: { source: 'visual', quote: 'Looks light' } } }, { categories });
+  assert.equal(rejected.brand, undefined);
+  assert.equal(rejected.packageDimensions, undefined);
+  assert.equal(rejected.shippingWeightKg, undefined);
 });
 
 test('real context preparation retains audio and the AI request uses the video with selected photos', { timeout: 30000 }, async (t) => {

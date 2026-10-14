@@ -31,6 +31,7 @@ const sizeChartRowSchema = new mongoose.Schema({
 
 const productDraftSchema = new mongoose.Schema({
   name: String,
+  brand: String,
   slug: String,
   sku: String,
   image: String,

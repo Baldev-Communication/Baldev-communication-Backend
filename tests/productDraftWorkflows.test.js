@@ -15,7 +15,7 @@ test.beforeEach(resetDatabase);
 async function draftFixture(overrides = {}) {
   const hasCategoryOverride = Object.prototype.hasOwnProperty.call(overrides, 'category');
   const category = hasCategoryOverride ? null : await Category.findOne({ slug: 'draft-sarees' }) || await Category.create({ name: 'Sarees', slug: 'draft-sarees' });
-  return ProductDraft.create({ name: 'Rose cotton saree', category: hasCategoryOverride ? overrides.category : category._id, images: [{ url: '/uploads/test.jpg', primary: true }],
+  return ProductDraft.create({ name: 'Rose cotton saree', brand: 'Baldev Communication', attributeValues: { brand: 'Baldev Communication', model: 'TEST-1', condition: 'New', warranty: 'No warranty' }, category: hasCategoryOverride ? overrides.category : category._id, images: [{ url: '/uploads/test.jpg', primary: true }],
     price: 1299, sellingPrice: 1299, originalPrice: 1599, stock: 4, sizingMode: 'free-size', ...overrides });
 }
 const publish = (token, ids) => request('/api/admin/product-drafts/publish-selected', { method: 'POST', token, body: { ids } });
@@ -35,7 +35,7 @@ test('manual product draft preserves commercial, fulfilment and scheduling detai
   const category = await Category.create({ name: 'Kurtis', slug: 'manual-kurtis' });
   const created = await request('/api/admin/product-drafts', {
     method: 'POST', token, body: {
-      name: 'Manual cotton kurti', sku: 'MANUAL-1', category: String(category._id),
+      name: 'Manual cotton kurti', brand: 'Baldev Communication', attributeValues: { brand: 'Baldev Communication', model: 'TEST-1', condition: 'New', warranty: 'No warranty' }, sku: 'MANUAL-1', category: String(category._id),
       images: [{ url: '/uploads/manual.jpg', primary: true }], price: 999, originalPrice: 1499,
       costPrice: 500, gstRate: 5, hsnCode: '6204', stock: 6, lowStockAlert: 2,
       reorderQuantity: 12, shippingWeightKg: 0.45, packageDimensions: { lengthCm: 30, widthCm: 24, heightCm: 4 },
