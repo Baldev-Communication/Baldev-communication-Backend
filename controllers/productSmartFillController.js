@@ -3,6 +3,9 @@ const Category = require('../models/Category');
 const { andFilter } = require('../services/storeService');
 const { readConfiguration } = require('../services/masterConfigurationService');
 const { analyzeProductContext, enabled } = require('../services/productImportContext.service');
+const { modelIdentity, researchProductSpecs } = require('../services/productWebSpecs.service');
+const { configuredAttributeValue } = require('../services/configuredAttributeValue');
+const { configuredAttributes } = require('../services/productAttributes');
 const { readProductPhoto } = require('../services/productSmartFillMedia');
 const { asyncHandler } = require('../middleware/validate');
 const { ApiError } = require('../utils/apiError');
@@ -30,23 +33,24 @@ exports.limiter = rateLimit({ windowMs: 60000, max: 12, standardHeaders: true, l
   keyGenerator: req => String(req.user._id),
   message: { message: 'Smart Fill has received several requests. Please wait a minute before trying again.' },
 });
-exports.status = (_req, res) => res.json({ enabled: enabled(), notesSupported: true, maxPhotos: 3 });
+exports.status = (_req, res) => res.json({ enabled: enabled(), webSupported: enabled(), notesSupported: true, maxPhotos: 4 });
 exports.fill = asyncHandler(async (req, res) => {
   if (req.body?.notes !== undefined && (typeof req.body.notes !== 'string' || req.body.notes.length > 7000)) throw new ApiError('VALIDATION_ERROR', 'Keep supplier notes under 7,000 characters.');
+  if (req.body?.webSearch !== undefined && typeof req.body.webSearch !== 'boolean') throw new ApiError('VALIDATION_ERROR', 'Web search preference must be true or false.');
   const urls = req.body?.imageUrls ?? [];
-  if (!Array.isArray(urls) || urls.length > 3 || urls.some(url => typeof url !== 'string' || url.length > 4096)) throw new ApiError('VALIDATION_ERROR', 'Select up to three uploaded product photos.');
+  if (!Array.isArray(urls) || urls.length > 4 || urls.some(url => typeof url !== 'string' || url.length > 4096)) throw new ApiError('VALIDATION_ERROR', 'Select up to four uploaded product photos.');
   const key = String(req.user._id);
   if (active.has(key)) throw new ApiError('DUPLICATE_REQUEST', 'A Smart Fill request is already running. Wait for it to finish.');
   active.add(key);
   const controller = new AbortController();
-  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(75000)]);
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(110000)]);
   const cancel = () => { if (!res.writableEnded) controller.abort(); };
   res.on('close', cancel);
   try {
     const [categories, configuration] = await Promise.all([
-      Category.find(andFilter({ isActive: { $ne: false } }, req.tenantFilter)).select('_id name').limit(100).lean(), readConfiguration(req.store?._id),
+      Category.find(andFilter({ isActive: { $ne: false } }, req.tenantFilter)).select('_id name definitionKey').limit(100).lean(), readConfiguration(req.store?._id),
     ]);
-    const attributes = configuration.structure.attributes || [];
+    const attributes = configuredAttributes(configuration.structure, categories, req.body?.existing);
     const caption = sourceText(req.body || {}, categories, attributes);
     if (!caption && !urls.length) throw new ApiError('VALIDATION_ERROR', 'Add a product photo, supplier notes or a few product details first.');
     if (!enabled() && !caption) throw new ApiError('SMART_FILL_UNAVAILABLE', 'Photo analysis needs Gemini configured on the backend. You can still paste supplier notes to fill stated details.');
@@ -83,15 +87,60 @@ exports.fill = asyncHandler(async (req, res) => {
     if (suggestion.contextStatus === 'failed') warnings.push(suggestion.contextError);
     if (!enabled()) warnings.push('Photo AI is not configured. These suggestions use only the details stated in your notes and form.');
     if (suggestion.priceAmbiguous || suggestion.multipleProducts) warnings.push('More than one price or product may be present. Confirm the product and enter its price manually.');
+    const existing = req.body?.existing || {};
+    const researchAttributes = configuredAttributes(configuration.structure, categories, {
+      ...existing, category: existing.category || suggestion.category,
+      subCategory: existing.subCategory || suggestion.subCategory,
+    });
+    let webSources = []; let searchSuggestions = '';
+    if (enabled() && req.body?.webSearch !== false) {
+      const identity = modelIdentity({ existing, suggestion, caption, attributes: researchAttributes });
+      if (identity) {
+        try {
+          const web = await researchProductSpecs({ identity, attributes: researchAttributes, signal });
+          webSources = web.sources;
+          searchSuggestions = web.searchSuggestions || '';
+          if (web.warning) warnings.push(web.warning);
+          for (const [field, value] of Object.entries(web.suggestion)) {
+            if (field === 'attributeValues') {
+              for (const [key, attributeValue] of Object.entries(value)) {
+                if (!suggestion.attributeValues[key]) {
+                  suggestion.attributeValues[key] = attributeValue;
+                  suggestion.fieldSources['attribute.' + key] = web.fieldSources['attribute.' + key];
+                }
+              }
+            } else if (!suggestion[field] || field === 'brand' && suggestion[field] === 'Baldev Communication') {
+              suggestion[field] = value;
+              suggestion.fieldSources[field] = web.fieldSources[field];
+            }
+          }
+        } catch (error) {
+          if (signal.aborted) throw error;
+          warnings.push('Internet specs could not be checked right now. Photo and note suggestions remain available.');
+        }
+      }
+    }
     if (configuration.structure.features?.sizing === false) { delete suggestion.sizes; delete suggestion.sizingMode; delete suggestion.sizeChart; }
+    for (const attribute of researchAttributes) {
+      const raw = suggestion.attributeValues?.[attribute.key];
+      if (!raw) continue;
+      const valid = configuredAttributeValue(attribute, raw);
+      if (valid) suggestion.attributeValues[attribute.key] = valid;
+      else {
+        delete suggestion.attributeValues[attribute.key];
+        delete suggestion.fieldSources['attribute.' + attribute.key];
+        warnings.push(`${attribute.label} needs one of the configured choices. Select it in the form.`);
+      }
+    }
     // Only listing data is returned. No credentials, model configuration or
     // provider responses are included, and nothing is saved or published here.
     const fields = ['name', 'brand', 'category', 'subCategory', 'description', 'shortDescription', 'colors', 'tags', 'highlights', 'fabric', 'occasion', 'sizes', 'sizingMode', 'price', 'originalPrice', 'countryOfOrigin', 'packageDimensions', 'shippingWeightKg', 'attributeValues'];
     const data = Object.fromEntries(fields.filter(field => suggestion[field] !== undefined).map(field => [field, suggestion[field]]));
-    res.json({ suggestion: data, fieldSources: suggestion.fieldSources || {}, mode: suggestion.contextStatus === 'completed' ? 'ai' : 'notes', warnings: [...new Set(warnings)] });
+    res.json({ suggestion: data, fieldSources: suggestion.fieldSources || {}, webSources, searchSuggestions, mode: webSources.length ? 'web' : suggestion.contextStatus === 'completed' ? 'ai' : 'notes', warnings: [...new Set(warnings)] });
   } catch (error) {
     if (signal.aborted && !controller.signal.aborted) throw new ApiError('SMART_FILL_TIMEOUT', 'Smart Fill took too long. Try again with fewer photos, or paste the product details.');
     if (!controller.signal.aborted) throw error;
   } finally { active.delete(key); res.off('close', cancel); }
 });
 exports.sourceText = sourceText;
+exports.configuredAttributes = configuredAttributes;

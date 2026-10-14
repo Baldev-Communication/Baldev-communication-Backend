@@ -24,6 +24,10 @@ const { supportsTransactions, runInTransaction } = require('../utils/transaction
 const { runUploadRequest } = require('../services/uploadRetryService');
 const { storeFiles } = require('../services/mediaUploadService');
 const { compressDraftUploads } = require('../services/draftImageCompression');
+const { draftUploadPlan } = require('../services/draftUploadGroups');
+const { configuredAttributes } = require('../services/productAttributes');
+const { configuredAttributeValue } = require('../services/configuredAttributeValue');
+const { readConfiguration } = require('../services/masterConfigurationService');
 const { createRecordOnce } = require('../services/recordCreationService');
 
 const DRAFT_AUDIT_FIELDS = [
@@ -68,20 +72,43 @@ exports.bulkUpload = async (req, res, next) => {
     if (!isR2Configured() && !isCloudinaryConfigured() && process.env.NODE_ENV === 'production' && !isLocalRequest(req)) {
       throw new ApiError('PERSISTENT_UPLOAD_STORAGE_REQUIRED', 'Draft images need Cloudflare R2 or Cloudinary in production.', { statusCode: 503 });
     }
+    if (!resume) draftUploadPlan(req.body, req.files.length);
     if (!resume) await compressDraftUploads(req.files);
     const result = await runUploadRequest(req, async context => {
+      const plan = draftUploadPlan(context.fields || req.body, context.resume ? context.storedFiles.length : req.files.length);
+      const categoryIds = [...new Set(plan.groups.map(group => group.details.category).filter(Boolean))];
+      const categories = categoryIds.length ? await Category.find(draftQuery(req, { _id: { $in: categoryIds }, isActive: { $ne: false }, isArchived: { $ne: true } })).select('_id name definitionKey').lean() : [];
+      if (categories.length !== categoryIds.length) throw new ApiError('VALIDATION_ERROR', 'Choose an active category for each product group.', { statusCode: 400 });
+      const structure = plan.groups.some(group => group.details.model && group.details.category) ? (await readConfiguration(req.store?._id)).structure : null;
+      const groupSeeds = plan.groups.map((group, index) => {
+        const category = categories.find(item => String(item._id) === group.details.category);
+        const definitions = structure && category ? configuredAttributes(structure, categories, { category: group.details.category }) : [];
+        const attributeValues = {};
+        for (const key of ['model', 'ram', 'storage']) {
+          const value = group.details[key];
+          if (!value) continue;
+          const definition = definitions.find(item => item.key === key);
+          if (!definition) continue;
+          const normalized = configuredAttributeValue(definition, value);
+          if (!normalized) throw new ApiError('VALIDATION_ERROR', `Product ${index + 1} has an unsupported ${definition.label}. Choose a configured value.`, { statusCode: 400 });
+          attributeValues[key] = normalized;
+        }
+        return { category, attributeValues };
+      });
       const uploaded = context.resume ? context.storedFiles : await storeFiles(req, context, { folder: 'products' });
-      const groupMode = (context.fields || req.body)?.groupMode === 'single' ? 'single' : 'separate';
-      const groups = groupMode === 'single' ? [uploaded] : uploaded.map((file) => [file]);
-      const payloads = groups.map((files, index) => withDraftStore(req, {
+      const payloads = plan.groups.map((group, index) => {
+        const files = group.indexes.map(fileIndex => uploaded[fileIndex]);
+        const { category, attributeValues } = groupSeeds[index];
+        return withDraftStore(req, {
         ...(context.managed ? { _id: new mongoose.Types.ObjectId(require('crypto').createHash('sha256').update(`${context.id}:draft:${index}`).digest('hex').slice(0, 24)), uploadOperationId: context.id } : {}),
-        name: '',
+        name: group.details.model || '',
         slug: uniqueDraftSlug(files[0]?.originalName || `draft-${index + 1}`),
         sku: `DRAFT-${Date.now()}-${String(index + 1).padStart(2, '0')}`,
         image: files[0]?.url,
         images: files.map((file, fileIndex) => ({ url: file.url, publicId: file.publicId, primary: fileIndex === 0 })),
         videos: [],
-        category: undefined,
+        category: category?._id,
+        attributeValues,
         subCategory: '',
         price: 0,
         originalPrice: 0,
@@ -101,7 +128,8 @@ exports.bulkUpload = async (req, res, next) => {
         status: 'draft',
         sourceType: 'manual',
         createdBy: req.user?._id,
-      }));
+      });
+      });
       const drafts = await runInTransaction(async session => {
         const rows = [];
         for (const payload of payloads) {
@@ -114,7 +142,7 @@ exports.bulkUpload = async (req, res, next) => {
       await Promise.all(drafts.map((draft) => logAudit({
         req, action: 'PRODUCT_DRAFT_CREATED', entityType: 'ProductDraft', entityId: draft._id,
         after: auditSnapshot(draft, DRAFT_AUDIT_FIELDS),
-        summary: groupMode === 'single' ? `Created one draft from ${uploaded.length} photos` : 'Created product draft from bulk upload',
+        summary: plan.mode === 'single' ? `Created one draft from ${uploaded.length} photos` : plan.mode === 'grouped' ? `Created ${drafts.length} grouped drafts from ${uploaded.length} photos` : 'Created product draft from bulk upload',
       })));
       return { success: true, message: 'Drafts created successfully', data: { drafts: drafts.map(formatDraft) } };
     }, { resume, replay: async saved => {
@@ -377,7 +405,6 @@ exports.publishSelected = asyncHandler(async (req, res) => {
   const drafts = await ProductDraft.find(draftQuery(req, { _id: { $in: ids }, autosaveKey: { $exists: false } })).populate('category');
   if (drafts.length !== ids.length) return res.status(404).json({ success: false, message: 'One or more selected drafts no longer exist. Refresh the list before publishing.' });
   const draftMap = new Map(drafts.map((draft) => [String(draft._id), draft]));
-  const payloads = new Map();
   const results = [];
   const published = [];
   for (const id of ids) {
@@ -396,10 +423,16 @@ exports.publishSelected = asyncHandler(async (req, res) => {
       results.push({ id, name: draft.name || '', status: 'already-published', productId: draft.publishedProductId });
       continue;
     }
-    const prepared = await applyProductStructure(buildProductPayloadFromDraft(draft));
+    let prepared;
+    try { prepared = await applyProductStructure(buildProductPayloadFromDraft(draft)); }
+    catch (error) {
+      const message = error.message || 'Review this draft’s configured specifications before publishing.';
+      await ProductDraft.updateOne(draftQuery(req, { _id: draft._id }), { $set: { lastPublishAttemptAt: new Date(), lastPublishError: message } });
+      results.push({ id, name: draft.name || '', status: 'failed', message });
+      continue;
+    }
     try { await require('../services/storefrontDiscoveryService').validateComplements(req, { completeLookProductIds: (draft.completeLookProductIds || []).map(String) }, null, draft.storeId); }
     catch (error) { results.push({ id, name: draft.name || '', status: 'failed', message: error.message }); continue; }
-    payloads.set(id, prepared);
     const validationMessage = validatePublishDraft(draft, prepared) || await validateCommercialDuplicates(draft, prepared);
     if (validationMessage) {
       await ProductDraft.updateOne(draftQuery(req, { _id: draft._id }), { $set: { lastPublishAttemptAt: new Date(), lastPublishError: validationMessage } });

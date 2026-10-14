@@ -30,6 +30,19 @@ test('missing or invalid selected drafts fail before any product is published', 
   assert.equal(await Product.countDocuments(), 0);
 });
 
+test('an invalid Condition fails only its own draft and reports the field to review', async () => {
+  const { token } = await createAdmin();
+  const invalid = await draftFixture({ name: 'Used iPhone 17', attributeValues: { brand: 'Apple', model: 'iPhone 17', condition: 'Good', warranty: 'No warranty' } });
+  const valid = await draftFixture({ name: 'New phone fixture' });
+  const response = await publish(token, [String(invalid._id), String(valid._id)]);
+  assert.equal(response.status, 200, JSON.stringify(response.data));
+  const results = response.data.data.results;
+  assert.match(results.find(item => item.id === String(invalid._id)).message, /Choose a valid Condition/);
+  assert.equal(results.find(item => item.id === String(valid._id)).status, 'published');
+  assert.equal((await ProductDraft.findById(invalid._id)).status, 'draft');
+  assert.equal(await Product.countDocuments(), 1);
+});
+
 test('manual product draft preserves commercial, fulfilment and scheduling details when published', async () => {
   const { token } = await createAdmin();
   const category = await Category.create({ name: 'Kurtis', slug: 'manual-kurtis' });

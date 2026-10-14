@@ -133,6 +133,33 @@ test('bulk-uploaded draft photos remain available through editing and publicatio
   assert.deepEqual(Buffer.from(await served.arrayBuffer()), optimized);
 });
 
+test('one upload creates independent four, three and two photo drafts with mobile model seeds', async (t) => {
+  const admin = await createAdmin();
+  const category = await require('../models/Category').create({ name: 'Smartphones', slug: 'smartphones', definitionKey: 'smartphones' });
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const body = new FormData();
+  for (let index = 0; index < 9; index++) body.append('images', new Blob([image], { type: 'image/png' }), `group-${index}.png`);
+  body.append('groupMode', 'grouped');
+  body.append('photoGroups', JSON.stringify([1, 1, 1, 1, 2, 2, 2, 3, 3]));
+  body.append('groupDetails', JSON.stringify({
+    1: { category: String(category._id), model: 'Apple iPhone 17', ram: '8', storage: '256' },
+    2: { category: String(category._id), model: 'Galaxy A15', ram: '8', storage: '128' },
+    3: { category: String(category._id), model: 'Pixel 10', ram: '8', storage: '256' },
+  }));
+  const response = await fetch(`${getBaseUrl()}/api/admin/product-drafts/bulk-upload`, { method: 'POST', headers: { Authorization: `Bearer ${admin.token}` }, body });
+  const result = await response.json();
+  assert.equal(response.status, 201, JSON.stringify(result));
+  const drafts = result.data.drafts;
+  assert.deepEqual(drafts.map(draft => draft.images.length), [4, 3, 2]);
+  assert.deepEqual(drafts.map(draft => draft.name), ['Apple iPhone 17', 'Galaxy A15', 'Pixel 10']);
+  assert.equal(drafts[0].attributeValues.storage, '256');
+  assert.equal(drafts[0].images[0].primary, true);
+  assert.equal(new Set(drafts.flatMap(draft => draft.images.map(photo => photo.url))).size, 9);
+  t.after(async () => {
+    await Promise.all(drafts.flatMap(draft => draft.images.map(photo => fs.unlink(path.resolve(__dirname, '..', 'uploads', path.basename(new URL(photo.url, getBaseUrl()).pathname))).catch(() => null))));
+  });
+});
+
 test('quick photo analysis sends the actual uploaded image, maps categories and leaves commercial fields manual', async (t) => {
   const admin = await createAdmin(), seller = await createProvisionedSeller('Photo Analysis Store');
   assert.equal((await request('/api/admin/products/quick-analyze/status', { token: admin.token })).data.enabled, false);

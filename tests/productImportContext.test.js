@@ -67,7 +67,7 @@ test('catalog Smart Fill validates requests before doing database or AI work', a
   const Category = require('../models/Category');
   const controller = require('../controllers/productSmartFillController');
   const lookup = t.mock.method(Category, 'find', () => { throw new Error('Must not query'); });
-  for (const body of [{ notes: {} }, { notes: 'a'.repeat(7001) }, { imageUrls: ['a', 'b', 'c', 'd'] }, { imageUrls: [null] }]) {
+  for (const body of [{ notes: {} }, { notes: 'a'.repeat(7001) }, { imageUrls: ['a', 'b', 'c', 'd', 'e'] }, { imageUrls: [null] }]) {
     let error; await controller.fill({ user: { _id: 'test' }, body }, {}, value => { error = value; });
     assert.equal(error.errorCode, 'VALIDATION_ERROR');
   }
@@ -108,6 +108,13 @@ test('fabric, sizes, measurements and custom fields require stated evidence', ()
   assert.equal(value.category, 'kurtis'); assert.equal(value.sizeChart.rows[0].bust, 38); assert.equal(value.sizeChart.rows[0].invented, undefined);
   assert.deepEqual(value.attributeValues, { lining: 'Cotton' });
   assert.equal(normalizeContext({ ...raw, fieldSources: { price: { source: 'caption', quote: '₹1299' } } }, { categories, caption: 'No price here' }).price, undefined);
+});
+
+test('photo AI keeps only configured Condition choices', () => {
+  const condition = { key: 'condition', type: 'dropdown', options: ['New', 'Refurbished', 'Used'] };
+  const withCondition = value => normalizeContext({ ...raw, attributeValues: { condition: value }, fieldSources: { ...raw.fieldSources, 'attribute.condition': { source: 'on_screen', quote: `Condition: ${value}` } } }, { categories, attributes: [condition] });
+  assert.equal(withCondition('Good').attributeValues.condition, undefined);
+  assert.equal(withCondition('used').attributeValues.condition, 'Used');
 });
 
 test('brand and parcel facts require explicit matching text, never visual estimates', () => {

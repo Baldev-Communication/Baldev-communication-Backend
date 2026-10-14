@@ -5,6 +5,7 @@ const ffmpeg = require('ffmpeg-static');
 const { run } = require('./productFrameSelection.service');
 const { inferProfile, SIZE_CHART_PROFILES } = require('./productSizingService');
 const { generateGeminiJson } = require('./geminiJson.service');
+const { configuredAttributeValue } = require('./configuredAttributeValue');
 
 const clean = (value, max = 240) => typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '';
 const list = (value) => [...new Set((Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[,/]/) : []).map((item) => clean(item, 80)).filter(Boolean))].slice(0, 20);
@@ -80,7 +81,7 @@ function statedCatalogDetails(text) {
 function captionSuggestion(caption = '', title = '', categories = []) {
   const text = String(caption || '').slice(0, 10000);
   const labelled = (label) => clean(text.match(new RegExp(`(?:^|\\n)\\s*(?:${label})\\s*[:=-]\\s*([^\\n]+)`, 'i'))?.[1], 160);
-  const first = text.split('\n').map((line) => line.trim()).find((line) => line.length > 4 && !/^#|https?:|\d+[,.\d]* likes|dm\b|shop now|follow\b|(?:selling price|sale price|price|mrp|shipping|delivery|fabric|material|sizes?(?: available)?|colou?rs?|category|product type|occasion|description|brand|package dimensions|packed weight|country of origin)\s*[:=-]/i.test(line));
+  const first = text.split('\n').map((line) => line.trim()).find((line) => line.length > 4 && !/^#|https?:|\d+[,.\d]* likes|dm\b|shop now|follow\b|(?:selling price|sale price|price|mrp|shipping|delivery|fabric|material|sizes?(?: available)?|colou?rs?|category|product type|occasion|description|brand|model|ram|storage|package dimensions|packed weight|country of origin)\s*[:=-]/i.test(line));
   const name = labelled('product(?: name)?|name|title') || clean((first || title).replace(/^[^:]{1,80} on Instagram:\s*/i, '').replace(/#[\w]+/g, '').replace(/["“”]/g, ''), 160);
   const sizes = list(labelled('sizes?(?: available)?')); const fabric = labelled('fabric|material');
   const colors = list(labelled('colou?rs?'));
@@ -170,7 +171,7 @@ function normalizeContext(raw, { caption = '', categories = [], attributes = [],
   if (result.originalPrice < result.price) { delete result.originalPrice; delete fieldSources.originalPrice; }
   result.attributeValues = {};
   for (const definition of attributes) {
-    const value = clean(raw.attributeValues?.[definition.key], 500); const source = evidence('attribute.' + definition.key);
+    const value = configuredAttributeValue(definition, clean(raw.attributeValues?.[definition.key], 500)); const source = evidence('attribute.' + definition.key);
     if (value && source && source.source !== 'visual') { result.attributeValues[definition.key] = value; fieldSources['attribute.' + definition.key] = source; }
   }
   return result;

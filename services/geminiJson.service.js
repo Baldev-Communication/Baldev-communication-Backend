@@ -20,6 +20,9 @@ function cacheFor(key, configured) {
 
 function providerError(status, payload) {
   const detail = String(payload?.error?.message || '');
+  if (status === 400 && /(?:google.?search|grounding|search tool).{0,100}(?:not supported|unsupported|unavailable)|(?:not supported|unsupported).{0,100}(?:google.?search|grounding|search tool)/i.test(detail)) {
+    return aiError('AI_SEARCH_UNSUPPORTED', 'The configured Gemini models do not support Google Search grounding.', true);
+  }
   if (status === 404 || status === 410 || status === 400 && /model.*(?:not found|not supported|unavailable|retired)/i.test(detail)) {
     return aiError('AI_MODEL_UNAVAILABLE', 'The configured AI model and available fallbacks could not be used. Check the Gemini model available to your project.', true);
   }
@@ -36,7 +39,7 @@ function providerError(status, payload) {
   return aiError('AI_REQUEST_REJECTED', 'Gemini could not accept the analysis request. Check the selected model and supported media format.');
 }
 
-function parseResponse(payload) {
+function responseText(payload) {
   const candidate = payload?.candidates?.[0];
   if (payload?.promptFeedback?.blockReason || ['SAFETY', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'IMAGE_SAFETY', 'RECITATION'].includes(candidate?.finishReason)) {
     throw aiError('AI_CONTENT_BLOCKED', 'Gemini declined to analyze this media. You can still enter the product details manually.');
@@ -47,6 +50,11 @@ function parseResponse(payload) {
   const text = (candidate?.content?.parts || []).filter(part => !part.thought).map(part => part.text || '').join('').trim();
   if (!text) throw aiError('AI_EMPTY_RESPONSE', 'Gemini returned no product details. Please try Smart Fill again.', true);
   if (text.length > 100000) throw aiError('AI_INVALID_RESPONSE', 'Gemini returned an unreadable answer. Please try Smart Fill again.', true);
+  return text;
+}
+
+function parseResponse(payload) {
+  const text = responseText(payload);
   try {
     const raw = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Expected an object');
@@ -54,7 +62,7 @@ function parseResponse(payload) {
   } catch { throw aiError('AI_INVALID_RESPONSE', 'Gemini returned an unreadable answer. Please try Smart Fill again.', true); }
 }
 
-async function generateGeminiJson({ parts, signal, timeoutMs = 60000, maxOutputTokens = 8192, temperature = 0 }) {
+async function generateGeminiJson({ parts, signal, timeoutMs = 60000, maxOutputTokens = 8192, temperature = 0, googleSearch = false }) {
   const key = String(process.env.GEMINI_API_KEY || '').trim();
   if (!key) throw aiError('AI_KEY_MISSING', 'The Gemini API key is missing. Configure it in the backend and restart the backend.');
   const configured = String(process.env.GEMINI_MODEL || '').trim().replace(/^models\//, '').slice(0, 100);
@@ -67,11 +75,13 @@ async function generateGeminiJson({ parts, signal, timeoutMs = 60000, maxOutputT
     try {
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key }, signal: requestSignal,
-        body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature, responseMimeType: 'application/json', maxOutputTokens } }),
+        body: JSON.stringify({ contents: [{ role: 'user', parts }], ...(googleSearch ? { tools: [{ google_search: {} }] } : {}), generationConfig: { temperature, ...(!googleSearch ? { responseMimeType: 'application/json' } : {}), maxOutputTokens } }),
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw providerError(response.status, payload);
-      const raw = parseResponse(payload);
+      const raw = googleSearch
+        ? { text: responseText(payload), groundingMetadata: payload?.candidates?.[0]?.groundingMetadata || {} }
+        : parseResponse(payload);
       cache.preferred = model;
       return { raw, model };
     } catch (error) {
