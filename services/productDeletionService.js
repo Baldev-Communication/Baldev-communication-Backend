@@ -21,6 +21,7 @@ const { supportsTransactions, runInTransaction } = require('../utils/transaction
 const { ApiError } = require('../utils/apiError');
 const { logAudit } = require('./auditService');
 const { assertStoreOwned } = require('../middleware/storeMiddleware');
+const { cleanupUnusedMedia, collectMedia } = require('./mediaCleanupService');
 
 const count = (Model, filter, session) => Model.countDocuments(filter).session(session || null);
 const version = (product) => crypto.createHash('sha256').update(JSON.stringify([
@@ -92,13 +93,13 @@ async function preview(req) {
     version: version(product), confirmation: String(product.name || product._id).trim(),
     eligible: Boolean(product.isArchived && !product.isActive) && !blockers.length && transactions,
     transactions, blockers, cleanup,
-    mediaPolicy: 'Uploaded files are retained to protect shared images and import sources.',
+    mediaPolicy: 'Unreferenced managed uploads are removed after permanent deletion; shared images are preserved.',
   };
 }
 
 async function permanentlyDelete(req) {
   if (!await supportsTransactions()) throw new ApiError('SERVICE_UNAVAILABLE', 'Permanent deletion requires a transaction-capable MongoDB deployment. Archive remains available.');
-  return runInTransaction(async (session) => {
+  const { response, media } = await runInTransaction(async (session) => {
     // No partial cleanup on standalone MongoDB or an unavailable transaction.
     if (!session) throw new ApiError('SERVICE_UNAVAILABLE', 'Safe permanent deletion is unavailable. Archive remains available.');
     const product = await findProduct(req, session);
@@ -119,12 +120,15 @@ async function permanentlyDelete(req) {
     await ProductDraft.updateMany({ completeLookProductIds: id }, { $pull: { completeLookProductIds: id }, $inc: { revision: 1 } }, { session });
     // Preserve the append-only opening ledger with a readable snapshot.
     await InventoryTransaction.updateMany({ product: id }, { $set: { productSnapshot: { name: product.name, sku: product.sku || '', deletedAt: new Date() } } }, { session });
+    const media = collectMedia(product);
     await Product.deleteOne({ _id: id }, { session });
     await logAudit({ req, action: 'PRODUCT_PERMANENT_DELETE', entityType: 'Product', entityId: id, storeId: product.storeId,
       before: { name: product.name, sku: product.sku, stock: product.stock, isArchived: true },
-      after: { permanentlyDeleted: true, cleanup, mediaRetained: true }, summary: `Permanently deleted unused product ${product.name}`, session, strict: true });
-    return { success: true, message: 'Product permanently deleted. Uploaded files and audit history were retained.', id: String(id) };
+      after: { permanentlyDeleted: true, cleanup, mediaCleanupPending: media.length }, summary: `Permanently deleted unused product ${product.name}`, session, strict: true });
+    return { response: { success: true, message: 'Product permanently deleted. Unused uploads were checked for cleanup.', id: String(id) }, media };
   });
+  const mediaCleanup = await cleanupUnusedMedia(media);
+  return { ...response, mediaCleanup };
 }
 
 module.exports = { preview, permanentlyDelete };

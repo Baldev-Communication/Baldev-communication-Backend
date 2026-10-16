@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const crypto = require('node:crypto');
 const Banner = require('../models/Banner');
 const BannerEngagement = require('../models/BannerEngagement');
+const { cleanupUnusedMedia } = require('../services/mediaCleanupService');
 const Order = require('../models/Order');
 const { BANNER_POSITIONS, BANNER_TYPES, DESTINATION_TYPES } = require('../models/Banner');
 const { andFilter } = require('../services/storeService');
@@ -161,11 +162,14 @@ exports.updateBanner = asyncHandler(async (req, res) => {
     throw new ApiError('CONFLICT', 'This banner changed in another session. Reload it before saving.', { statusCode: 409 });
   }
   const before = auditSnapshot(banner, AUDIT_FIELDS);
+  const oldImages = [banner.image, banner.tabletImage, banner.mobileImage].filter(Boolean);
   Object.assign(banner, readBannerPayload(req.body, banner));
   banner.revision = Number(banner.revision || 0) + 1;
   await banner.save();
+  const currentImages = new Set([banner.image, banner.tabletImage, banner.mobileImage].filter(Boolean));
+  const mediaCleanup = await cleanupUnusedMedia(oldImages.filter(url => !currentImages.has(url)).map(url => ({ url })));
   logAudit({ req, action: 'BANNER_UPDATE', entityType: 'Banner', entityId: banner._id, storeId: banner.storeId, before, after: auditSnapshot(banner, AUDIT_FIELDS) });
-  res.json(managementBannerView(banner));
+  res.json({ ...managementBannerView(banner), ...(mediaCleanup.failed.length ? { mediaCleanup } : {}) });
 });
 
 exports.updateBannerStatus = asyncHandler(async (req, res) => {
@@ -195,6 +199,27 @@ exports.deleteBanner = asyncHandler(async (req, res) => {
   await banner.save();
   logAudit({ req, action: 'BANNER_ARCHIVE', entityType: 'Banner', entityId: banner._id, storeId: banner.storeId, before, after: auditSnapshot(banner, AUDIT_FIELDS) });
   res.json({ success: true, archived: true, message: 'Banner archived. Its media and performance history were preserved.', banner: managementBannerView(banner) });
+});
+
+exports.permanentlyDeleteBanner = asyncHandler(async (req, res) => {
+  const id = requireObjectId(req.params.id, 'banner id');
+  const banner = await Banner.findOne(andFilter({ _id: id, isArchived: true }, req.tenantFilter));
+  if (!banner) throw notFound('Archived banner not found');
+  if (banner.campaignId) throw new ApiError('VALIDATION_ERROR', 'Campaign-managed banners must be managed from Campaigns.');
+  if (String(req.body?.confirm || '').trim() !== banner.title.trim()) {
+    throw new ApiError('VALIDATION_ERROR', 'Type the exact banner title to confirm permanent deletion.');
+  }
+  const before = auditSnapshot(banner, AUDIT_FIELDS);
+  const deleted = await Banner.findOneAndDelete(andFilter({ _id: id, isArchived: true, campaignId: null, revision: banner.revision }, req.tenantFilter));
+  if (!deleted) throw new ApiError('CONFLICT', 'Banner changed. Refresh before deleting.', { statusCode: 409 });
+  const mediaCleanup = await cleanupUnusedMedia([banner.image, banner.tabletImage, banner.mobileImage].filter(Boolean).map(url => ({ url })));
+  const engagementCleanup = await BannerEngagement.deleteMany({ banner: id }).then(() => true).catch((error) => {
+    console.error('Banner engagement cleanup failed:', String(id), error);
+    return false;
+  });
+  await logAudit({ req, action: 'BANNER_PERMANENT_DELETE', entityType: 'Banner', entityId: id, storeId: banner.storeId, before,
+    after: { permanentlyDeleted: true, mediaCleanup, engagementCleanup } });
+  res.json({ success: true, message: 'Banner permanently deleted.', mediaCleanup, engagementCleanup });
 });
 
 exports.restoreBanner = asyncHandler(async (req, res) => {

@@ -6,7 +6,7 @@ const Category = require('../models/Category');
 const slugify = require('../utils/slugify');
 const mongoose = require('mongoose');
 const { normalizeProductImages, normalizeProductPayload, sanitizeProductImages } = require('../utils/imageUtils');
-const { deleteImageFromR2, isR2Configured } = require('../services/r2Upload');
+const { cleanupUnusedMedia, collectMedia } = require('../services/mediaCleanupService');
 const { hasManagedVariants, normalizeVariantsPayload, totalVariantStock, validateVariantPayload } = require('../services/variantService');
 const { applyInventoryAdjustment, markProductOutOfStock, recordOpeningInventory } = require('../services/inventoryService');
 const { andFilter } = require('../services/storeService');
@@ -601,9 +601,9 @@ exports.updateProduct = asyncHandler(async (req, res) => {
     }
     return saved;
   });
-  await cleanupRemovedProductImages(existingProduct.images || [], [
-    ...(product.images || []), ...(product.variants || []).flatMap(variant => variant.images || []),
-  ]);
+  const previousMedia = collectMedia(existingProduct);
+  const currentUrls = new Set(collectMedia(product).map(asset => asset.url));
+  const mediaCleanup = await cleanupUnusedMedia(previousMedia.filter(asset => !currentUrls.has(asset.url)));
   logAudit({
     req,
     action: 'PRODUCT_UPDATE',
@@ -613,7 +613,7 @@ exports.updateProduct = asyncHandler(async (req, res) => {
     before: auditSnapshot(existingProduct, PRODUCT_AUDIT_FIELDS),
     after: auditSnapshot(product, PRODUCT_AUDIT_FIELDS),
   });
-  res.json(normalizeProductResponse(product, req));
+  res.json({ ...normalizeProductResponse(product, req), ...(mediaCleanup.failed.length ? { mediaCleanup } : {}) });
 });
 
 exports.deleteProduct = asyncHandler(async (req, res) => {
@@ -923,42 +923,4 @@ async function findProductConflicts(req, { name = '', sku = '', barcode = '', ex
 
 function isInaccessibleImageUrl(url = '') {
   return /https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\//i.test(String(url));
-}
-
-async function cleanupRemovedProductImages(existingImages = [], nextImages = []) {
-  existingImages = existingImages.flatMap(imageAssets);
-  nextImages = nextImages.flatMap(imageAssets);
-  const retainedKeys = new Set(
-    nextImages.map((image) => String(image.publicId || image.url || '')).filter(Boolean),
-  );
-  const removedImages = existingImages.filter((image) => !retainedKeys.has(String(image.publicId || image.url || '')));
-  await Promise.all(removedImages.map((image) => safeDeleteImage(image)));
-}
-
-function imageAssets(image) {
-  const assets = [image, image?.background?.original, image?.background?.edited].filter(Boolean);
-  return [...new Map(assets.map(asset => [asset.publicId || asset.url, asset])).values()];
-}
-
-async function safeDeleteImage(image) {
-  if (!isR2Configured()) return;
-  try {
-    await deleteImageFromR2(image);
-  } catch {
-    // Ignore storage cleanup failures so product save/delete doesn't break.
-  }
-}
-
-async function cleanupProductAssets(product) {
-  const deletions = [];
-  if (Array.isArray(product.images)) {
-    deletions.push(...product.images.flatMap(imageAssets).map((image) => safeDeleteImage(image)));
-  }
-  if (Array.isArray(product.videos)) {
-    for (const video of product.videos) {
-      deletions.push(safeDeleteImage(video));
-      if (video?.thumbnail) deletions.push(safeDeleteImage(video.thumbnail));
-    }
-  }
-  await Promise.all(deletions);
 }

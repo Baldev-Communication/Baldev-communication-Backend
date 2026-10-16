@@ -153,6 +153,7 @@ router.patch('/banners/:id/status', requireStorePermission('marketing.write'), s
 router.patch('/banners/:id/restore', requireStorePermission('marketing.write'), stripClientStoreId, banner.restoreBanner);
 router.put('/banners/:id', requireStorePermission('marketing.write'), stripClientStoreId, banner.updateBanner);
 router.delete('/banners/:id', requireStorePermission('marketing.write'), banner.deleteBanner);
+router.delete('/banners/:id/permanent', requireStorePermission('marketing.write'), banner.permanentlyDeleteBanner);
 
 router.get('/campaigns', requireStorePermission('marketing.read'), requireStoreFeature('festival'), campaign.list);
 router.post('/campaigns', requireStorePermission('marketing.write'), requireStoreFeature('festival'), stripClientStoreId, campaign.create);

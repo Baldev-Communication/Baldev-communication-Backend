@@ -4,13 +4,13 @@ const mongoose = require('mongoose');
 const { applyProductStructure } = require('../services/masterConfigurationService');
 const multer = require('multer');
 const fs = require('fs/promises');
-const path = require('path');
 const slugify = require('../utils/slugify');
 const Product = require('../models/Product');
 const ProductDraft = require('../models/ProductDraft');
 const Category = require('../models/Category');
-const { deleteImageFromR2, isR2Configured } = require('../services/r2Upload');
-const { deleteFile: deleteCloudinaryFile, isCloudinaryConfigured } = require('../services/cloudinaryUpload');
+const { isR2Configured } = require('../services/r2Upload');
+const { isCloudinaryConfigured } = require('../services/cloudinaryUpload');
+const { cleanupUnusedMedia, collectMedia } = require('../services/mediaCleanupService');
 const { isLocalRequest, normalizeProductImages, normalizeProductPayload, sanitizeProductImages } = require('../utils/imageUtils');
 const { normalizeProductSizing, validateProductSizing } = require('../services/productSizingService');
 const { validateVariantPayload } = require('../services/variantService');
@@ -363,9 +363,11 @@ exports.deleteDraft = asyncHandler(async (req, res) => {
   }
   // Never remove published media: it may still be used by the live product.
   if (draft.uploadOperationId) await require('../models/UploadOperation').updateOne({ _id: draft.uploadOperationId }, { $set: { status: 'REMOVED' } });
-  if (draft.sourceType === 'manual' && !draft.publishedProductId) await cleanupUnreferencedDraftMedia(draft);
+  const mediaCleanup = (!draft.sourceType || draft.sourceType === 'manual') && !draft.publishedProductId
+    ? await cleanupUnusedMedia(collectMedia(draft)) : null;
   if (!draft.publishedProductId) await logAudit({ req, action: 'PRODUCT_DRAFT_DELETED', entityType: 'ProductDraft', entityId: draft._id, before: auditSnapshot(draft, DRAFT_AUDIT_FIELDS), summary: draft.autosaveKey ? 'Deleted product form autosave' : 'Permanently deleted archived product draft' });
-  res.json({ success: true, message: draft.publishedProductId ? 'Published draft removed. Its product is unchanged.' : 'Draft deleted permanently' });
+  res.json({ success: true, message: draft.publishedProductId ? 'Published draft removed. Its product is unchanged.' : 'Draft deleted permanently',
+    ...(mediaCleanup ? { mediaCleanup } : {}) });
 });
 
 exports.archiveDraft = asyncHandler(async (req, res) => {
@@ -825,39 +827,4 @@ function normalizeSizeChart(value = {}) {
 
 async function cleanupTempFiles(files = []) {
   await Promise.all(files.map((file) => fs.unlink(file.path).catch(() => null)));
-}
-
-async function cleanupUnreferencedDraftMedia(draft) {
-  const entries = [
-    ...(Array.isArray(draft.images) ? draft.images.flatMap(item => [item, item.background?.original, item.background?.edited].filter(Boolean)).map((item) => ({ ...item, resourceType: 'image' })) : []),
-    ...(Array.isArray(draft.videos) ? draft.videos.map((item) => ({ ...item, resourceType: 'video' })) : []),
-  ].filter((item) => item?.url || item?.publicId);
-  await Promise.allSettled(entries.map(async (entry) => {
-    const referenceFilter = { $or: [
-      ...(entry.url ? [{ 'images.url': entry.url }, { 'videos.url': entry.url }] : []),
-      ...(entry.publicId ? [{ 'images.publicId': entry.publicId }, { 'videos.publicId': entry.publicId }] : []),
-      ...(entry.url ? [{ 'images.background.original.url': entry.url }, { 'images.background.edited.url': entry.url }] : []),
-      ...(entry.publicId ? [{ 'images.background.original.publicId': entry.publicId }, { 'images.background.edited.publicId': entry.publicId }] : []),
-    ] };
-    if (!referenceFilter.$or.length) return;
-    const [draftReference, productReference] = await Promise.all([
-      ProductDraft.exists(referenceFilter), Product.exists(referenceFilter),
-    ]);
-    if (draftReference || productReference) return;
-    const mediaUrl = String(entry.url || '');
-    if (mediaUrl.startsWith('/uploads/') || /\/uploads\//i.test(mediaUrl)) { await deleteLocalUpload(mediaUrl); return; }
-    const r2Base = String(process.env.R2_PUBLIC_URL || '').replace(/\/$/, '');
-    if (isR2Configured() && (r2Base && mediaUrl.startsWith(r2Base))) { await deleteImageFromR2(entry); return; }
-    if (isCloudinaryConfigured() && entry.publicId && /res\.cloudinary\.com/i.test(mediaUrl)) { await deleteCloudinaryFile(entry, entry.resourceType); }
-  }));
-}
-
-async function deleteLocalUpload(url) {
-  let pathname = String(url || '');
-  try { if (/^https?:\/\//i.test(pathname)) pathname = new URL(pathname).pathname; } catch { return; }
-  if (!pathname.startsWith('/uploads/')) return;
-  const uploadsRoot = path.resolve(__dirname, '..', 'uploads');
-  const target = path.resolve(uploadsRoot, pathname.slice('/uploads/'.length));
-  if (target !== uploadsRoot && !target.startsWith(`${uploadsRoot}${path.sep}`)) return;
-  await fs.unlink(target).catch(() => null);
 }

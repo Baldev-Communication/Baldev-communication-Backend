@@ -4,7 +4,7 @@ const Product = require('../models/Product');
 const ProductDraft = require('../models/ProductDraft');
 const Coupon = require('../models/Coupon');
 const slugify = require('../utils/slugify');
-const { deleteImageFromR2, isR2Configured } = require('../services/r2Upload');
+const { cleanupUnusedMedia } = require('../services/mediaCleanupService');
 const { andFilter } = require('../services/storeService');
 const { asyncHandler } = require('../middleware/validate');
 const { ApiError } = require('../utils/apiError');
@@ -284,10 +284,10 @@ exports.updateCategory = asyncHandler(async (req, res) => {
   if (category.isArchived) category.isActive = false;
   await category.save();
   if (source.parent !== undefined) await updateDescendantLevels(category, req);
-  if (oldImage && oldImage !== category.image && oldImage !== category.socialImage) await safeDeleteCategoryImageIfUnused(oldImage);
-  if (oldSocialImage && oldSocialImage !== category.socialImage && oldSocialImage !== category.image && oldSocialImage !== oldImage) await safeDeleteCategoryImageIfUnused(oldSocialImage);
+  const removedImages = [oldImage, oldSocialImage].filter(image => image && image !== category.image && image !== category.socialImage);
+  const mediaCleanup = await cleanupUnusedMedia(removedImages.map(url => ({ url })));
   await logAudit({ req, action: 'CATEGORY_UPDATE', entityType: 'Category', entityId: category._id, storeId: category.storeId, before, after: auditSnapshot(category, CATEGORY_AUDIT_FIELDS) });
-  res.json(category);
+  res.json({ ...category.toObject(), ...(mediaCleanup.failed.length ? { mediaCleanup } : {}) });
 });
 
 exports.updateCategoryStatus = asyncHandler(async (req, res) => {
@@ -395,22 +395,7 @@ exports.deleteCategory = asyncHandler(async (req, res) => {
   const snapshot = auditSnapshot(category, CATEGORY_AUDIT_FIELDS);
   const deleted = await Category.findOneAndDelete(scoped(req, { _id: category._id }));
   if (!deleted) return res.status(404).json({ message: 'Category not found' });
-  if (category.image) await safeDeleteCategoryImageIfUnused(category.image);
-  if (category.socialImage && category.socialImage !== category.image) await safeDeleteCategoryImageIfUnused(category.socialImage);
+  const mediaCleanup = await cleanupUnusedMedia([category.image, category.socialImage].filter(Boolean).map(url => ({ url })));
   await logAudit({ req, action: 'CATEGORY_DELETE', entityType: 'Category', entityId: category._id, storeId: category.storeId, before: snapshot });
-  res.json({ message: 'Category permanently deleted' });
+  res.json({ message: 'Category permanently deleted', mediaCleanup });
 });
-
-async function safeDeleteCategoryImage(image) {
-  if (!isR2Configured()) return;
-  try {
-    await deleteImageFromR2(image);
-  } catch {
-    // Media cleanup is best-effort and never rolls back a saved category change.
-  }
-}
-
-async function safeDeleteCategoryImageIfUnused(image) {
-  const stillUsed = await Category.exists({ $or: [{ image }, { socialImage: image }] });
-  if (!stillUsed) await safeDeleteCategoryImage(image);
-}

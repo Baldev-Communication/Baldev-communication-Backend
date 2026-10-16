@@ -61,6 +61,29 @@ test('structured replies exclude thinking parts and tolerate a JSON code fence',
   assert.equal((await generateGeminiJson({ parts })).raw.name, 'Fixture saree');
 });
 
+test('web evidence retains leading whitespace and remaps part-local byte offsets', async t => {
+  setup(t);
+  const first = '\n  model: iPhone 15\n';
+  const second = 'dimensions: 147.6 × 71.6 × 7.8 mm\nprocessor: Uncited chip';
+  const dimensionLine = second.split('\n')[0];
+  t.mock.method(global, 'fetch', async () => success('', {
+    content: { parts: [{ thought: true, text: 'Not public evidence' }, { text: first }, { text: second }] },
+    groundingMetadata: { groundingChunks: [{ web: { uri: 'https://example.com/phone', title: 'Phone specifications' } }], groundingSupports: [
+      { segment: { partIndex: 1, startIndex: 3, endIndex: Buffer.byteLength(first) - 1 }, groundingChunkIndices: [0] },
+      { segment: { partIndex: 2, endIndex: Buffer.byteLength(dimensionLine) }, groundingChunkIndices: [0] },
+      { segment: { partIndex: 0, startIndex: 0, endIndex: 8 }, groundingChunkIndices: [0] },
+      { segment: { partIndex: 2, startIndex: 0, endIndex: 99999 }, groundingChunkIndices: [0] },
+    ] },
+  }));
+  const { raw } = await generateGeminiJson({ parts, googleSearch: true });
+  assert.ok(raw.text.startsWith('\n  model:')); assert.ok(!raw.text.includes('Not public evidence'));
+  assert.equal(raw.groundingMetadata.groundingSupports.length, 2);
+  const { normalizeGroundedSpecs } = require('../services/productWebSpecs.service');
+  const result = normalizeGroundedSpecs(raw, { model: 'iPhone 15' }, [{ key: 'model' }, { key: 'dimensions' }, { key: 'processor' }]);
+  assert.equal(result.suggestion.attributeValues.dimensions, '147.6 × 71.6 × 7.8 mm');
+  assert.equal(result.suggestion.attributeValues.processor, undefined);
+});
+
 test('a leaked key has an actionable safe message and never retries other models', async (t) => {
   setup(t);
   const request = t.mock.method(global, 'fetch', async () => reply(403, { error: { message: 'Your API key was reported as leaked. Please use another API key. ' + process.env.GEMINI_API_KEY } }));

@@ -14,4 +14,5 @@ router.get('/:id', protect, adminOnly, banner.getBannerById);
 router.post('/', protect, adminOnly, banner.createBanner);
 router.put('/:id', protect, adminOnly, banner.updateBanner);
 router.delete('/:id', protect, adminOnly, banner.deleteBanner);
+router.delete('/:id/permanent', protect, adminOnly, banner.permanentlyDeleteBanner);
 module.exports = router;

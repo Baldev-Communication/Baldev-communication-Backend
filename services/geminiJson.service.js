@@ -26,7 +26,7 @@ function providerError(status, payload) {
   if (status === 404 || status === 410 || status === 400 && /model.*(?:not found|not supported|unavailable|retired)/i.test(detail)) {
     return aiError('AI_MODEL_UNAVAILABLE', 'The configured AI model and available fallbacks could not be used. Check the Gemini model available to your project.', true);
   }
-  if (status === 429) return aiError('AI_QUOTA_EXCEEDED', 'The Gemini quota is currently exhausted. Wait for it to reset, then try again.');
+  if (status === 429) return aiError('AI_QUOTA_EXCEEDED', 'The Gemini quota is currently exhausted. Check the API project billing and usage limits, or wait for the limit to reset.');
   if ([400, 401, 403].includes(status) && /reported.{0,20}leaked|leaked.{0,50}key|key.{0,50}leaked/i.test(detail)) {
     // Preserve the shared access-denied code so bulk imports stop immediately.
     // Never forward the provider payload, which may contain sensitive values.
@@ -62,6 +62,36 @@ function parseResponse(payload) {
   } catch { throw aiError('AI_INVALID_RESPONSE', 'Gemini returned an unreadable answer. Please try Smart Fill again.', true); }
 }
 
+function groundedResponse(payload) {
+  responseText(payload); // Apply the same refusal, size and completion checks.
+  const candidate = payload.candidates[0];
+  const parts = candidate.content.parts || [];
+  const offsets = new Map(); const texts = []; let bytes = 0;
+  parts.forEach((part, index) => {
+    if (part.thought || typeof part.text !== 'string') return;
+    offsets.set(index, { offset: bytes, text: part.text });
+    texts.push(part.text); bytes += Buffer.byteLength(part.text, 'utf8') + 1;
+  });
+  const metadata = candidate.groundingMetadata || {};
+  const groundingSupports = (metadata.groundingSupports || []).flatMap(support => {
+    const segment = support.segment || {};
+    const part = offsets.get(segment.partIndex ?? 0);
+    if (!part) return [];
+    let start = segment.startIndex ?? 0; let end = segment.endIndex;
+    if (end === undefined && typeof segment.text === 'string' && segment.text) {
+      const match = part.text.indexOf(segment.text);
+      if (match < 0 || part.text.indexOf(segment.text, match + 1) >= 0) return [];
+      start = Buffer.byteLength(part.text.slice(0, match), 'utf8');
+      end = start + Buffer.byteLength(segment.text, 'utf8');
+    }
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > Buffer.byteLength(part.text, 'utf8')) return [];
+    return [{ ...support, segment: { ...segment, partIndex: 0, startIndex: part.offset + start, endIndex: part.offset + end } }];
+  });
+  // Gemini offsets belong to the original Part, measured in UTF-8 bytes.
+  // Preserve whitespace and remap each part before the field parser uses them.
+  return { text: texts.join('\n'), groundingMetadata: { ...metadata, groundingSupports } };
+}
+
 async function generateGeminiJson({ parts, signal, timeoutMs = 60000, maxOutputTokens = 8192, temperature = 0, googleSearch = false }) {
   const key = String(process.env.GEMINI_API_KEY || '').trim();
   if (!key) throw aiError('AI_KEY_MISSING', 'The Gemini API key is missing. Configure it in the backend and restart the backend.');
@@ -80,7 +110,7 @@ async function generateGeminiJson({ parts, signal, timeoutMs = 60000, maxOutputT
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw providerError(response.status, payload);
       const raw = googleSearch
-        ? { text: responseText(payload), groundingMetadata: payload?.candidates?.[0]?.groundingMetadata || {} }
+        ? groundedResponse(payload)
         : parseResponse(payload);
       cache.preferred = model;
       return { raw, model };
