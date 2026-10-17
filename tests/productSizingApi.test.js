@@ -4,10 +4,17 @@ const { request, resetDatabase, startTestEnvironment, stopTestEnvironment } = re
 const { createAdmin } = require('./factories');
 const Category = require('../models/Category');
 const Product = require('../models/Product');
+const Configuration = require('../models/MasterConfiguration');
+const { getIndustryPreset } = require('../config/industryPresets');
 
 test.before(startTestEnvironment);
 test.after(stopTestEnvironment);
-test.beforeEach(resetDatabase);
+test.beforeEach(async () => {
+  await resetDatabase();
+  // These legacy sizing fixtures explicitly exercise the fashion catalogue;
+  // the deployed store now defaults to required mobile specifications.
+  await Configuration.create({ structure: getIndustryPreset('fashion') });
+});
 
 test('product API removes legacy size choices from sarees', async () => {
   const { token } = await createAdmin();

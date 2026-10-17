@@ -31,7 +31,7 @@ test('background APIs require admin/store access and process previews without pu
 test('product editing and restoration retain original storage asset and previous edit after reload', async (t) => {
   const admin = await createAdmin();
   const original = { url: 'https://media.example/products/original.webp', publicId: 'products/original.webp', primary: true };
-  const product = await createProduct({ images: [original], sizes: [], sizingMode: 'free-size', sku: 'BACKGROUND-TEST', description: 'A product for background editing.' });
+  const product = await createProduct({ images: [original], sizes: [], sizingMode: 'free-size', sku: 'BACKGROUND-TEST', description: 'A product for background editing.', attributeValues: { brand: 'Test', model: 'TEST-1', condition: 'New', warranty: 'No warranty' } });
   const keys = ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET_NAME', 'R2_PUBLIC_URL'];
   keys.forEach(key => { process.env[key] = key === 'R2_PUBLIC_URL' ? 'https://media.example' : 'isolated-background-test'; });
   t.after(() => keys.forEach(key => delete process.env[key]));
@@ -57,7 +57,7 @@ test('draft publication keeps background metadata for later product editing', as
   const image = { url: '/uploads/edited.webp', primary: true, background: {
     original: { url: '/uploads/original.webp' }, edited: { url: '/uploads/edited.webp' }, preset: 'transparent',
   } };
-  const draft = await require('../models/ProductDraft').create({ name: 'Ivory silk saree', category: category._id, images: [image], price: 1299, sellingPrice: 1299, originalPrice: 1599, stock: 4, sizingMode: 'free-size' });
+  const draft = await require('../models/ProductDraft').create({ name: 'Ivory silk saree', category: category._id, attributeValues: { brand: 'Test', model: 'TEST-1', condition: 'New', warranty: 'No warranty' }, images: [image], price: 1299, sellingPrice: 1299, originalPrice: 1599, stock: 4, sizingMode: 'free-size' });
   const published = await request('/api/admin/product-drafts/publish-selected', { method: 'POST', token: admin.token, body: { ids: [String(draft._id)] } });
   assert.equal(published.status, 200, JSON.stringify(published.data));
   const product = await require('../models/Product').findOne({ sourceDraftId: draft._id }).lean();

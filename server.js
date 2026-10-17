@@ -53,6 +53,11 @@ async function startServer() {
 
   await connectDB();
 
+  if (mongoose.connection.readyState === 1) {
+    const store = await require('./services/storeService').ensureDefaultStore();
+    await require('./services/baldevStorePolicy').initializeBaldevStorePolicy(store);
+  }
+
   const PORT = process.env.PORT || process.env.SERVER_PORT || 5000;
   const persistentImageStorageConfigured = isR2Configured() || isCloudinaryConfigured();
   const localOwnerDemoRequested = isLocalOwnerDemoEnabled();
@@ -105,6 +110,7 @@ async function startServer() {
       retryTraffic.unref(); cleanupTasks.push(() => clearInterval(retryTraffic));
     }
     cleanupTasks.push(require('./services/orderAlertService').startWorker());
+    cleanupTasks.push(require('./modules/bulk-product-import/worker').startWorker());
     if (require('./config/commerce').rentalModuleEnabled()) cleanupTasks.push(require('./services/rentalWorker').startWorker());
     cleanupTasks.push(require('./services/storeContentService').startContentReleaseWorker());
     cleanupTasks.push(require('./services/subscriptionLifecycleService').startSubscriptionLifecycleWorker());

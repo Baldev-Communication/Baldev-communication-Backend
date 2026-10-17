@@ -75,8 +75,9 @@ exports.bulkUpload = async (req, res, next) => {
     const result = await runUploadRequest(req, async context => {
       const plan = draftUploadPlan(context.fields || req.body, context.resume ? context.storedFiles.length : req.files.length);
       const categoryIds = [...new Set(plan.groups.map(group => group.details.category).filter(Boolean))];
-      const categories = categoryIds.length ? await Category.find(draftQuery(req, { _id: { $in: categoryIds }, isActive: { $ne: false }, isArchived: { $ne: true } })).select('_id name definitionKey customAttributes').lean() : [];
-      if (categories.length !== categoryIds.length) throw new ApiError('VALIDATION_ERROR', 'Choose an active category for each product group.', { statusCode: 400 });
+      const selectedCategories = categoryIds.length ? await Category.find(draftQuery(req, { _id: { $in: categoryIds }, isActive: { $ne: false }, isArchived: { $ne: true } })).select('_id name definitionKey customAttributes parent').lean() : [];
+      if (selectedCategories.length !== categoryIds.length) throw new ApiError('VALIDATION_ERROR', 'Choose an active category for each product group.', { statusCode: 400 });
+      const categories = await require('../services/categoryHierarchy').includeCategoryAncestors(selectedCategories, req.tenantFilter || {});
       const structure = (await readConfiguration(req.store?._id)).structure;
       const groupSeeds = plan.groups.map((group, index) => {
         const category = categories.find(item => String(item._id) === group.details.category);
@@ -151,7 +152,7 @@ exports.listDrafts = asyncHandler(async (req, res) => {
   const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
   const limit = Math.min(MAX_DRAFT_PAGE_SIZE, Math.max(1, Number.parseInt(req.query.limit, 10) || 24));
   const status = ['draft', 'published', 'archived', 'all'].includes(req.query.status) ? req.query.status : 'active';
-  const sourceType = ['manual', 'reel-import', 'social-import'].includes(req.query.sourceType) ? req.query.sourceType : '';
+  const sourceType = ['manual', 'reel-import', 'social-import', 'bulk-import'].includes(req.query.sourceType) ? req.query.sourceType : '';
   const readiness = ['ready', 'review', 'incomplete'].includes(req.query.readiness) ? req.query.readiness : '';
   const escapedSearch = escapeRegex(String(req.query.q || '').trim().slice(0, 100));
   const category = mongoose.isValidObjectId(req.query.category) ? req.query.category : '';
@@ -159,7 +160,11 @@ exports.listDrafts = asyncHandler(async (req, res) => {
   if (status === 'active') filter.status = 'draft';
   else if (status !== 'all') filter.status = status;
   if (sourceType) filter.sourceType = sourceType;
-  if (category) filter.category = category;
+  if (req.query.importBatch && mongoose.isValidObjectId(req.query.importBatch)) filter.sourceImportBatchId = req.query.importBatch;
+  if (category) {
+    const rows = await Category.find(draftQuery(req, {})).select('_id parent').lean();
+    filter.category = { $in: require('../services/categoryHierarchy').categoryDescendantIds([category], rows) };
+  }
   if (escapedSearch) filter.$or = [
     { name: { $regex: escapedSearch, $options: 'i' } },
     { sku: { $regex: escapedSearch, $options: 'i' } },
@@ -351,7 +356,7 @@ exports.deleteDraft = asyncHandler(async (req, res) => {
   }
   // Never remove published media: it may still be used by the live product.
   if (draft.uploadOperationId) await require('../models/UploadOperation').updateOne({ _id: draft.uploadOperationId }, { $set: { status: 'REMOVED' } });
-  const mediaCleanup = (!draft.sourceType || draft.sourceType === 'manual') && !draft.publishedProductId
+  const mediaCleanup = (!draft.sourceType || ['manual', 'bulk-import'].includes(draft.sourceType)) && !draft.publishedProductId
     ? await cleanupUnusedMedia(collectMedia(draft)) : null;
   if (!draft.publishedProductId) await logAudit({ req, action: 'PRODUCT_DRAFT_DELETED', entityType: 'ProductDraft', entityId: draft._id, before: auditSnapshot(draft, DRAFT_AUDIT_FIELDS), summary: draft.autosaveKey ? 'Deleted product form autosave' : 'Permanently deleted archived product draft' });
   res.json({ success: true, message: draft.publishedProductId ? 'Published draft removed. Its product is unchanged.' : 'Draft deleted permanently',
@@ -525,6 +530,8 @@ async function prepareImportedDraft(draft) {
 
 exports.prepareImportedDraft = prepareImportedDraft;
 exports.publishPreparedDraft = publishPreparedDraft;
+exports.validateDraftPayload = validateDraftPayload;
+exports.buildProductPayloadFromDraft = buildProductPayloadFromDraft;
 
 function formatDraft(draft) {
   const data = typeof draft.toObject === 'function' ? draft.toObject() : { ...draft };
@@ -598,6 +605,8 @@ function escapeRegex(value) {
 
 function normalizeDraftPayload(body = {}) {
   const payload = { ...body };
+  delete payload.sourceImportBatchId;
+  delete payload.sourceImportRowId;
   delete payload.publishingToken;
   delete payload.uploadOperationId;
   if (typeof payload.images === 'string') {
@@ -690,6 +699,7 @@ function buildProductPayloadFromDraft(draft) {
     shortDescription: data.shortDescription || '',
     description: data.description || '',
     category: data.category?._id || data.category || undefined,
+    categoryDefinitionKey: data.categoryDefinitionKey || '',
     subCategory: data.subCategory || '',
     price: sellingPrice,
     originalPrice,

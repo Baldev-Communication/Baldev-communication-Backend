@@ -6,7 +6,7 @@ const { analyzeProductContext, captionSuggestion } = require('../services/produc
 const { enabled, providers, defaultProvider, providerLabel, supportedProvider } = require('../services/productAiProvider.service');
 const { modelIdentity, researchProductSpecs } = require('../services/productWebSpecs.service');
 const { configuredAttributeValue } = require('../services/configuredAttributeValue');
-const { configuredAttributes } = require('../services/productAttributes');
+const { configuredAttributes, configuredCategory } = require('../services/productAttributes');
 const { readProductPhoto } = require('../services/productSmartFillMedia');
 const { asyncHandler } = require('../middleware/validate');
 const { ApiError } = require('../utils/apiError');
@@ -54,9 +54,10 @@ exports.fill = asyncHandler(async (req, res) => {
   const cancel = () => { if (!res.writableEnded) controller.abort(); };
   res.on('close', cancel);
   try {
-    const [categories, configuration] = await Promise.all([
-      Category.find(andFilter({ isActive: { $ne: false }, isArchived: { $ne: true } }, req.tenantFilter)).select('_id name definitionKey customAttributes').limit(100).lean(), readConfiguration(req.store?._id),
+    const [selectedCategories, configuration] = await Promise.all([
+      Category.find(andFilter({ isActive: { $ne: false }, isArchived: { $ne: true } }, req.tenantFilter)).select('_id name definitionKey customAttributes parent').limit(100).lean(), readConfiguration(req.store?._id),
     ]);
+    const categories = await require('../services/categoryHierarchy').includeCategoryAncestors(selectedCategories, req.tenantFilter || {});
     const attributes = configuredAttributes(configuration.structure, categories, req.body?.existing);
     const caption = sourceText(req.body || {}, categories, attributes);
     if (!caption && !urls.length) throw new ApiError('VALIDATION_ERROR', 'Add a product photo, supplier notes or a few product details first.');
@@ -69,7 +70,8 @@ exports.fill = asyncHandler(async (req, res) => {
       }
       if (urls.length && !images.length && !caption) throw new ApiError('SMART_FILL_MEDIA', warnings[0]);
     }
-    const nameOnly = !urls.length && !clean(req.body?.notes) && req.body?.webSearch !== false
+    const nameIdentity = modelIdentity({ existing: req.body?.existing, caption, attributes });
+    const nameOnly = !urls.length && !clean(req.body?.notes) && req.body?.webSearch !== false && nameIdentity?.kind !== 'electronics'
       && modelIdentity({ existing: req.body?.existing, caption, attributes });
     // The grounded lookup can read an exact model name directly. Avoid a second
     // ungrounded AI request when there are no photos or supplier notes.
@@ -100,8 +102,14 @@ exports.fill = asyncHandler(async (req, res) => {
     if (!enabled(provider)) warnings.push('Photo AI is not configured. These suggestions use only the details stated in your notes and form.');
     if (suggestion.priceAmbiguous || suggestion.multipleProducts) warnings.push('More than one price or product may be present. Confirm the product and enter its price manually.');
     const existing = req.body?.existing || {};
+    const selectedType = configuredCategory(configuration.structure, categories, { ...existing, name: existing.name || suggestion.name, category: existing.category || suggestion.category });
+    if (selectedType && !existing.categoryDefinitionKey && !(selectedType.key === 'general_products' && nameIdentity && nameIdentity.kind !== 'electronics')) {
+      suggestion.categoryDefinitionKey = selectedType.key;
+      suggestion.fieldSources.categoryDefinitionKey = { source: 'template', quote: `Specification template: ${selectedType.name}` };
+    }
     let researchAttributes = configuredAttributes(configuration.structure, categories, {
       ...existing, category: existing.category || suggestion.category,
+      name: existing.name || suggestion.name, categoryDefinitionKey: existing.categoryDefinitionKey || suggestion.categoryDefinitionKey,
       subCategory: existing.subCategory || suggestion.subCategory,
     });
     let webSources = []; let searchSuggestions = '';
@@ -131,6 +139,11 @@ exports.fill = asyncHandler(async (req, res) => {
           if (inferredPhoneCategory && webSources.length) {
             suggestion.category = String(inferredPhoneCategory._id);
             suggestion.fieldSources.category = { source: 'web', quote: `Verified phone model: ${identity.model}`, url: webSources[0].url, title: webSources[0].title };
+            const phoneType = configuredCategory(configuration.structure, categories, { category: suggestion.category });
+            if (phoneType) {
+              suggestion.categoryDefinitionKey = phoneType.key;
+              suggestion.fieldSources.categoryDefinitionKey = suggestion.fieldSources.category;
+            }
           }
           for (const [field, value] of Object.entries(web.suggestion)) {
             if (field === 'attributeValues') {
@@ -172,7 +185,7 @@ exports.fill = asyncHandler(async (req, res) => {
     }
     // Only listing data is returned. No credentials, model configuration or
     // provider responses are included, and nothing is saved or published here.
-    const fields = ['name', 'brand', 'category', 'subCategory', 'description', 'shortDescription', 'colors', 'tags', 'highlights', 'fabric', 'occasion', 'sizes', 'sizingMode', 'price', 'originalPrice', 'countryOfOrigin', 'packageDimensions', 'shippingWeightKg', 'warranty', 'attributeValues'];
+    const fields = ['name', 'brand', 'category', 'categoryDefinitionKey', 'subCategory', 'description', 'shortDescription', 'colors', 'tags', 'highlights', 'fabric', 'occasion', 'sizes', 'sizingMode', 'price', 'originalPrice', 'countryOfOrigin', 'packageDimensions', 'shippingWeightKg', 'warranty', 'attributeValues'];
     const data = Object.fromEntries(fields.filter(field => suggestion[field] !== undefined).map(field => [field, suggestion[field]]));
     if (specificationLookup.status === 'completed') {
       specificationLookup.fieldCount = Object.keys(suggestion.attributeValues || {}).filter(key => suggestion.fieldSources['attribute.' + key]?.source === 'web').length;

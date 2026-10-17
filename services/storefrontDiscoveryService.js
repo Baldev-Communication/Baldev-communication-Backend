@@ -25,7 +25,7 @@ async function preferences(req) {
     rentalModuleEnabled() && req.store?._id ? Configuration.findOne({ storeId: req.store._id }).select('mode').maxTimeMS(4000).lean() : null,
   ]);
   const mode = effectiveCommerceMode(rental?.mode || req.store?.catalogStructure?.commerce?.mode);
-  return { mode, rentalEnabled: mode !== 'SALE_ONLY', occasionShoppingEnabled: settings?.occasionShoppingEnabled !== false, recentlyViewedEnabled: settings?.recentlyViewedEnabled !== false, completeLookEnabled: settings?.completeLookEnabled !== false };
+  return { mode, rentalEnabled: mode !== 'SALE_ONLY', occasionShoppingEnabled: settings?.occasionShoppingEnabled === true, recentlyViewedEnabled: settings?.recentlyViewedEnabled !== false, completeLookEnabled: settings?.completeLookEnabled !== false };
 }
 function catalogModeFilter(mode) { return mode === 'SALE_ONLY' ? { commerceMode: { $ne: 'RENTAL_ONLY' } } : {}; }
 async function discovery(req) {

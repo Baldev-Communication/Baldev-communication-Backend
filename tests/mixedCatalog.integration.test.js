@@ -11,6 +11,35 @@ test.before(startTestEnvironment);
 test.after(stopTestEnvironment);
 test.beforeEach(resetDatabase);
 
+test('different product types share a store category and survive draft publication with their own specifications', async () => {
+  const { token } = await createAdmin();
+  const category = await Category.create({ name: 'Household electronics', slug: 'household-electronics', definitionKey: 'general_products' });
+  const base = { category: String(category._id), price: 1500, sellingPrice: 1500, originalPrice: 1500, stock: 2,
+    images: [{ url: '/uploads/appliance.webp', primary: true }], description: 'An appliance supplied with the listed features.' };
+  const dryer = await request('/api/admin/products', { method: 'POST', token, body: { ...base,
+    name: 'Example hair dryer', sku: 'DRYER-MIXED', categoryDefinitionKey: 'hair_dryers',
+    attributeValues: { condition: 'New', power_consumption: '2000', heat_settings: '3', cool_shot: 'Yes' },
+  } });
+  assert.equal(dryer.status, 201, JSON.stringify(dryer.data));
+  assert.equal(dryer.data.categoryDefinitionKey, 'hair_dryers');
+  assert.equal(dryer.data.attributeValues.model, undefined);
+  const draft = await request('/api/admin/product-drafts', { method: 'POST', token, body: { ...base,
+    name: 'Example solar torch', sku: 'TORCH-MIXED', categoryDefinitionKey: 'torches_lights',
+    attributeValues: { condition: 'New', solar_charging: 'Yes', light_output: '100' },
+  } });
+  assert.equal(draft.status, 201, JSON.stringify(draft.data));
+  assert.equal(draft.data.data.categoryDefinitionKey, 'torches_lights');
+  const published = await request('/api/admin/product-drafts/publish-selected', { method: 'POST', token, body: { ids: [draft.data.data._id] } });
+  assert.equal(published.status, 200, JSON.stringify(published.data));
+  const product = published.data.data.products[0];
+  assert.equal(product.categoryDefinitionKey, 'torches_lights');
+  assert.equal(product.attributeValues.solar_charging, 'Yes');
+  const storefront = await request(`/api/products/${product.slug}`);
+  assert.equal(storefront.status, 200, JSON.stringify(storefront.data));
+  assert.ok(storefront.data.specifications.some(item => item.key === 'light_output' && item.value === '100' && item.unit === 'lm'));
+  assert.equal(storefront.data.specifications.some(item => item.key === 'ram' || item.key === 'power_consumption'), false);
+});
+
 test('an existing mobile store receives the new templates without rewriting its saved configuration', async () => {
   const structure = JSON.parse(JSON.stringify(getIndustryPreset('mobile')));
   structure.categoryDefinitions = structure.categoryDefinitions.filter(item => item.key === 'smartphones');

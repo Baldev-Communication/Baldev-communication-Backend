@@ -24,7 +24,13 @@ function normalizeProductSizing(payload = {}, categoryName = '') {
 
   if (mode === 'free-size') {
     next.sizes = [];
-    next.variants = [];
+    // No garment sizing still permits colour, RAM, storage and other catalog
+    // options. Remove stale garment-size combinations, not valid electronics
+    // inventory that happens to share the free-size representation.
+    next.variants = (Array.isArray(next.variants) ? next.variants : []).filter(variant => {
+      const optionSize = variant?.optionValues instanceof Map ? variant.optionValues.get('size') : variant?.optionValues?.size;
+      return !String(variant?.size || optionSize || '').trim();
+    });
     next.sizeChart = { unit: 'in', columns: [], rows: [] };
     return next;
   }

@@ -21,7 +21,7 @@ function publicDeliveryConfig(settings = {}) {
     local: {
       enabled: settings.localDeliveryEnabled === true,
       radiusKm: Number(settings.localDeliveryRadiusKm ?? 5),
-      fee: Number(settings.localDeliveryFee ?? 0),
+      fee: Number(settings.localDeliveryFee ?? settings.deliveryCharge ?? 99),
       freeAboveEnabled: settings.localDeliveryFreeAboveEnabled === true,
       freeAbove: Number(settings.localDeliveryFreeAbove ?? 999),
       estimate: String(settings.localDeliveryEstimate || ''),
@@ -47,7 +47,7 @@ function localDeliveryQuote({ settings, address, amount }) {
   const distance = distanceKm(origin, destination);
   if (!Number.isFinite(radius) || radius <= 0 || distance > radius + 1e-9) throw new ApiError('LOCAL_DELIVERY_UNAVAILABLE', `This address is outside the store's ${radius} km local delivery area. Choose another available delivery method or address.`);
   const free = settings.localDeliveryFreeAboveEnabled === true && amount >= Number(settings.localDeliveryFreeAbove ?? 999);
-  const charge = free ? 0 : Number(settings.localDeliveryFee ?? 0);
+  const charge = free ? 0 : Number(settings.localDeliveryFee ?? settings.deliveryCharge ?? 99);
   if (!Number.isFinite(charge) || charge < 0) throw new ApiError('LOCAL_DELIVERY_UNAVAILABLE', 'Local delivery pricing is unavailable. Please contact the store.');
   return {
     deliveryMethod: 'LOCAL', provider: 'manual', fulfillmentMode: 'SELF', serviceable: true,
@@ -59,7 +59,7 @@ function localDeliveryQuote({ settings, address, amount }) {
 }
 
 function normalizeLocalDeliverySettings(updates, current = {}) {
-  const next = { standardDeliveryEnabled: true, localDeliveryEnabled: false, localDeliveryRadiusKm: 5, localDeliveryFee: 0, localDeliveryFreeAbove: 999, ...current, ...updates };
+  const next = { standardDeliveryEnabled: true, localDeliveryEnabled: false, localDeliveryRadiusKm: 5, localDeliveryFee: 99, localDeliveryFreeAbove: 999, ...current, ...updates };
   const invalid = message => { throw new ApiError('SHIPPING_VALIDATION', message); };
   for (const key of ['standardDeliveryEnabled', 'localDeliveryEnabled', 'localDeliveryFreeAboveEnabled']) {
     if (updates[key] !== undefined && typeof updates[key] !== 'boolean') invalid('Delivery options must be enabled or disabled.');

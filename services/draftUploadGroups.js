@@ -13,7 +13,7 @@ const detailText = (value, label, max) => {
   return value.trim();
 };
 
-const textLimits = { name: 180, brand: 120, sku: 100, subCategory: 100, condition: 500, warranty: 500, colour: 120,
+const textLimits = { name: 180, brand: 120, sku: 100, subCategory: 100, categoryDefinitionKey: 50, condition: 500, warranty: 500, colour: 120,
   hsnCode: 20, barcode: 100, supplierName: 160, supplierSku: 100, countryOfOrigin: 120, manufacturerDetails: 1000,
   shortDescription: 240, description: 5000, careInstructions: 2000, returnPolicy: 2000 };
 const numericFields = { sellingPrice: {}, originalPrice: {}, costPrice: {}, stock: { integer: true }, gstRate: { max: 100 },
@@ -67,6 +67,7 @@ function normalizeDetails(raw, id) {
 }
 
 function draftUploadSeed(details, { structure = {}, categories = [], productNumber = 1 } = {}) {
+  if (details.categoryDefinitionKey && !(structure.categoryDefinitions || []).some(item => item.key === details.categoryDefinitionKey && item.active !== false)) invalid(`Product ${productNumber}: choose an available product type.`);
   const definitions = configuredAttributes(structure, categories, details);
   const values = { ...details.attributeValues };
   for (const [field, key] of Object.entries(attributeFields)) if (details[field]) values[key] = details[field];

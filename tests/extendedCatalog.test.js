@@ -52,3 +52,26 @@ test('custom specification fields are isolated by category, validated and retain
   assert.throws(() => cleanCategorySpecifications([{ key: 'custom_choice', label: 'Choice', type: 'dropdown', options: [] }]), /Add choices/);
   assert.throws(() => cleanCategorySpecifications(Array(31).fill({})), /at most 30/);
 });
+
+test('mixed store names choose relevant templates and unknown types retain custom specifications', () => {
+  const { configuredCategory } = require('../services/productAttributes');
+  const category = { _id: 'all', name: 'Other electronics', customAttributes: [{ key: 'custom_finish', label: 'Finish', type: 'text' }] };
+  for (const [name, key, field] of [
+    ['Morphy hair dryer', 'hair_dryers', 'power_consumption'],
+    ['Havells hair dryer 2000W', 'hair_dryers', 'heat_settings'],
+    ['Bettery bank 22.5W', 'power_banks', 'output_power'],
+    ['Bajaj solar torch', 'torches_lights', 'solar_charging'],
+    ['Example trimmer', 'personal_care', 'blade_material'],
+    ['Example unusual appliance', 'general_products', 'features'],
+  ]) {
+    const product = { category: 'all', name };
+    assert.equal(configuredCategory(DEFAULT_STRUCTURE, [category], product).key, key, name);
+    const fields = configuredAttributes(DEFAULT_STRUCTURE, [category], product);
+    assert.ok(fields.some(item => item.key === field), name);
+    assert.ok(fields.some(item => item.key === 'custom_finish'), name);
+    assert.equal(fields.some(item => item.key === 'ram'), false, name);
+    assert.equal(fields.find(item => item.key === 'model').required, false, name);
+  }
+  assert.equal(configuredCategory(DEFAULT_STRUCTURE, [category], { category: 'all', name: 'Hair dryer', categoryDefinitionKey: 'general_products' }).key, 'general_products');
+  assert.equal(configuredCategory(DEFAULT_STRUCTURE, [{ _id: 'd', name: 'Hair dryer' }], { category: 'd' }).key, 'hair_dryers');
+});

@@ -1,3 +1,4 @@
+const { categoryTrail, categoryDescendantIds } = require('../services/categoryHierarchy');
 const { asyncHandler } = require('../middleware/validate');
 const { applyProductStructure, readConfiguration } = require('../services/masterConfigurationService');
 const { rentalModuleEnabled, effectiveCommerceMode } = require('../config/commerce');
@@ -71,6 +72,15 @@ function withStoreId(payload, req) {
   return next;
 }
 
+function clientProductFields(data = {}) {
+  const payload = { ...data };
+  // A restored draft or a GET response contains server-owned record metadata.
+  // Publication links and database IDs are assigned only by their own workflow.
+  for (const key of ['_id', 'id', '__v', 'sourceDraftId', 'createdAt', 'updatedAt', 'deletedAt',
+    'inventoryRevision', 'catalogReferenceRevision', 'lastInventoryChangeAt', 'lastInventoryChangedBy', 'lastBulkImportOperation']) delete payload[key];
+  return payload;
+}
+
 async function getCategoryName(categoryId, req) {
   if (!categoryId || !mongoose.Types.ObjectId.isValid(categoryId)) return '';
   const category = await Category.findOne(andFilter({ _id: categoryId, isArchived: { $ne: true } }, req?.tenantFilter)).select('name').lean();
@@ -119,12 +129,10 @@ exports.getProducts = asyncHandler(async (req, res) => {
     : null;
   const configuredAttributes = collectConfiguredAttributes(catalogConfiguration?.structure);
   const searchableAttributes = configuredAttributes.filter((attribute) => attribute.searchable).map((attribute) => attribute.key);
+  const hierarchyCategories = req.query.search || req.query.category ? await Category.find(catalogQuery(req, isAdminRequest ? {} : { isActive: { $ne: false }, isArchived: { $ne: true } })).select('_id name slug previousSlugs parent').lean() : [];
   if (req.query.search) {
     const terms = readQueryValues(String(req.query.search).split(/\s+/), 8);
-    const categoryMatches = await Promise.all(terms.map((term) => Category.find(andFilter({
-      isActive: { $ne: false },
-      $or: searchTermVariants(term).map((variant) => ({ name: { $regex: escapeRegex(variant), $options: 'i' } })),
-    }, req.tenantFilter)).select('_id').limit(50).lean()));
+    const categoryMatches = terms.map(term => categoryDescendantIds(hierarchyCategories.filter(category => searchTermVariants(term).some(variant => new RegExp(escapeRegex(variant), 'i').test(category.name))).map(category => String(category._id)), hierarchyCategories));
     terms.forEach((term, index) => addQueryClause(query, { $or: searchTermVariants(term).flatMap((variant) => [
       { name: { $regex: escapeRegex(variant), $options: 'i' } },
       { sku: { $regex: escapeRegex(variant), $options: 'i' } },
@@ -134,7 +142,7 @@ exports.getProducts = asyncHandler(async (req, res) => {
       { description: { $regex: escapeRegex(variant), $options: 'i' } },
       { shortDescription: { $regex: escapeRegex(variant), $options: 'i' } },
       { tags: { $regex: escapeRegex(variant), $options: 'i' } },
-      ...(categoryMatches[index].length ? [{ category: { $in: categoryMatches[index].map((item) => item._id) } }] : []),
+      ...(categoryMatches[index].length ? [{ category: { $in: categoryMatches[index] } }] : []),
       ...searchableAttributes.map((key) => ({ [`attributeValues.${key}`]: { $regex: escapeRegex(variant), $options: 'i' } })),
     ]) }));
   }
@@ -143,19 +151,18 @@ exports.getProducts = asyncHandler(async (req, res) => {
     const attributeKey = queryKey.slice(5);
     if (!filterableAttributes.has(attributeKey)) return;
     const values = readQueryValues(req.query[queryKey]);
-    if (values.length) query[`attributeValues.${attributeKey}`] = { $in: values.map(exactCaseInsensitive) };
+    if (values.length) {
+      const match = { $in: values.map(exactCaseInsensitive) };
+      if (attributeKey === 'brand') addQueryClause(query, { $or: [{ 'attributeValues.brand': match }, { brand: match }] });
+      else query[`attributeValues.${attributeKey}`] = match;
+    }
   });
   if (req.query.category) {
     const selectedCategories = readQueryValues(req.query.category);
     const objectIds = selectedCategories.filter((value) => mongoose.Types.ObjectId.isValid(value));
     const aliases = selectedCategories.filter((value) => !mongoose.Types.ObjectId.isValid(value));
-    const matchedCategories = aliases.length ? await Category.find(andFilter({ $or: [
-      { slug: { $in: aliases.map(exactCaseInsensitive) } },
-      { previousSlugs: { $in: aliases.map(exactCaseInsensitive) } },
-      { name: { $in: aliases.map(exactCaseInsensitive) } },
-    ] }, req.tenantFilter)).select('_id').lean() : [];
-    const categoryIds = [...new Set([...objectIds, ...matchedCategories.map((item) => String(item._id))])];
-    query.category = categoryIds.length ? { $in: categoryIds } : null;
+    const matched = hierarchyCategories.filter(category => objectIds.includes(String(category._id)) || aliases.some(alias => [category.name, category.slug, ...(category.previousSlugs || [])].some(value => sameText(value, alias))));
+    query.category = { $in: categoryDescendantIds(matched.map(item => String(item._id)), hierarchyCategories) };
   }
   if (req.query.size) {
     const values = readQueryValues(req.query.size).map(exactCaseInsensitive);
@@ -277,7 +284,7 @@ function addQueryClause(query, clause) {
 function collectConfiguredAttributes(structure = {}) {
   const definitions = new Map((structure.attributes || []).map((attribute) => [attribute.key, attribute]));
   (structure.categoryDefinitions || []).forEach((category) => (category.attributes || []).forEach((attribute) => {
-    if (attribute && typeof attribute === 'object' && attribute.key) definitions.set(attribute.key, { ...(definitions.get(attribute.key) || {}), ...attribute });
+    if (attribute && typeof attribute === 'object' && attribute.key) definitions.set(attribute.key, { ...(definitions.get(attribute.key) || {}), ...attribute, filterable: Boolean(definitions.get(attribute.key)?.filterable || attribute.filterable), searchable: Boolean(definitions.get(attribute.key)?.searchable || attribute.searchable) });
   }));
   return Array.from(definitions.values());
 }
@@ -314,7 +321,7 @@ async function buildPublicCatalogFacets(req, catalogConfiguration, configuredAtt
   });
   const [rawProducts, categories] = await Promise.all([
     Product.find(visibility).select('name sku brand category subCategory price originalPrice salePrice saleStartAt saleEndAt discountPercentage rating stock sizes colors variants fabric occasion description shortDescription tags attributeValues isFeatured isNewArrival isBestSeller showInTrending').lean(),
-    Category.find(andFilter({ isActive: { $ne: false }, isArchived: { $ne: true } }, req.tenantFilter)).select('_id name slug previousSlugs').lean(),
+    Category.find(andFilter({ isActive: { $ne: false }, isArchived: { $ne: true } }, req.tenantFilter)).select('_id name slug previousSlugs parent').lean(),
   ]);
   const products = rawProducts.map((product) => applyEffectivePricing(product));
   const categoryById = new Map(categories.map((category) => [String(category._id), category]));
@@ -351,8 +358,9 @@ async function buildPublicCatalogFacets(req, catalogConfiguration, configuredAtt
   return {
     categories: categories.map((category) => ({
       value: String(category._id),
-      label: category.name,
-      count: categoryProducts.filter((product) => String(product.category || '') === String(category._id)).length,
+      label: categoryTrail(category._id, categoryById).map(item => item.name).join(' / '),
+      parent: category.parent || null,
+      count: categoryProducts.filter(product => categoryTrail(product.category, categoryById).some(item => String(item._id) === String(category._id))).length,
     })),
     sizes: buildFacetOptions(products.flatMap((product) => productOptionValues(product, 'size')), sizeProducts, (product, value) => productOptionValues(product, 'size').some((item) => sameText(item, value)), sortFacetSizes),
     colors: buildFacetOptions(products.flatMap((product) => productOptionValues(product, 'color')), colorProducts, (product, value) => productOptionValues(product, 'color').some((item) => sameText(item, value))),
@@ -371,15 +379,13 @@ async function buildPublicCatalogFacets(req, catalogConfiguration, configuredAtt
 
 function productMatchesPublicFilters(product, filters, categoryById, ignored, configuredAttributes) {
   if (!ignored.has('search') && filters.search) {
-    const category = categoryById.get(String(product.category || ''));
     const searchableKeys = configuredAttributes.filter((attribute) => attribute.searchable).map((attribute) => attribute.key);
-    const haystack = [product.name, product.sku, product.brand, category?.name, category?.slug, product.subCategory, product.fabric, product.occasion, product.description, product.shortDescription, ...(product.tags || []), ...searchableKeys.map((key) => readAttributeValue(product, key))].flatMap(splitStoredValues).join(' ').toLowerCase();
+    const haystack = [product.name, product.sku, product.brand, ...categoryTrail(product.category, categoryById).flatMap(item => [item.name, item.slug]), product.subCategory, product.fabric, product.occasion, product.description, product.shortDescription, ...(product.tags || []), ...searchableKeys.map((key) => readAttributeValue(product, key))].flatMap(splitStoredValues).join(' ').toLowerCase();
     const terms = String(filters.search).trim().toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
     if (!terms.every((term) => searchTermVariants(term).some((variant) => haystack.includes(variant.toLowerCase())))) return false;
   }
   if (!ignored.has('category') && filters.category) {
-    const category = categoryById.get(String(product.category || ''));
-    const aliases = [product.category, category?.name, category?.slug, ...(category?.previousSlugs || [])].map(normalizeFacetKey).filter(Boolean);
+    const aliases = [product.category, ...categoryTrail(product.category, categoryById).flatMap(item => [item._id, item.name, item.slug, ...(item.previousSlugs || [])])].map(normalizeFacetKey).filter(Boolean);
     if (!readQueryValues(filters.category).some((value) => aliases.includes(normalizeFacetKey(value)))) return false;
   }
   if (!ignored.has('size') && filters.size && !matchesAnyFacet(productOptionValues(product, 'size'), filters.size)) return false;
@@ -404,7 +410,7 @@ function productMatchesPublicFilters(product, filters, categoryById, ignored, co
 
 function readAttributeValue(product, key) {
   const source = product.attributeValues instanceof Map ? Object.fromEntries(product.attributeValues) : (product.attributeValues || {});
-  return source[key];
+  return key === 'brand' ? source[key] || product.brand : source[key];
 }
 
 function productOptionValues(product, type) {
@@ -513,7 +519,7 @@ exports.analyzeQuickAdd = async (req, res) => {
 
 exports.createProduct = asyncHandler(async (req, res) => {
   await require('../services/storefrontDiscoveryService').validateComplements(req, req.body || {});
-  const basePayload = await applyProductStructure(withStoreId({ ...req.body, images: sanitizeProductImages(req.body.images) }, req));
+  const basePayload = await applyProductStructure(withStoreId({ ...clientProductFields(req.body), images: sanitizeProductImages(req.body.images) }, req));
   const categoryName = await getCategoryName(basePayload.category, req);
   if (basePayload.category && !categoryName) return res.status(400).json({ message: 'Choose a category from this store' });
   const variantError = validateVariantPayload(basePayload.variants);
@@ -525,23 +531,36 @@ exports.createProduct = asyncHandler(async (req, res) => {
   if (error) return res.status(400).json({ message: error });
   const sizingError = validateProductSizing(payload, categoryName);
   if (sizingError) return res.status(400).json({ message: sizingError });
-  const productData = normalizeProductPayload({ ...payload, slug: slugify(payload.slug || payload.name) });
+  const slugBase = slugify(payload.slug || payload.name) || 'product';
+  const productData = normalizeProductPayload(payload);
   if (Number(productData.stock || 0) > 0) {
     productData.lastInventoryChangeAt = new Date();
     productData.lastInventoryChangedBy = req.user?._id;
   }
-  const product = await runInTransaction(async (session) => {
-    const created = session
-      ? (await Product.create([productData], { session }))[0]
-      : await Product.create(productData);
+  let product;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const slug = await uniqueValue(req, 'slug', slugBase);
     try {
-      await recordOpeningInventory(created, { userId: req.user?._id, reference: 'Product create' }, session);
-    } catch (ledgerError) {
-      if (!session) await Product.deleteOne({ _id: created._id }).catch(() => null);
-      throw ledgerError;
+      product = await runInTransaction(async (session) => {
+        const created = session
+          ? (await Product.create([{ ...productData, slug }], { session }))[0]
+          : await Product.create({ ...productData, slug });
+        try {
+          await recordOpeningInventory(created, { userId: req.user?._id, reference: 'Product create' }, session);
+        } catch (ledgerError) {
+          if (!session) await Product.deleteOne({ _id: created._id }).catch(() => null);
+          throw ledgerError;
+        }
+        return created;
+      });
+      break;
+    } catch (error) {
+      // Retry the whole transaction only for a competing URL allocation. SKU,
+      // barcode and other unique constraints remain genuine user conflicts.
+      const duplicateSlug = error.code === 11000 && Object.keys(error.keyPattern || error.keyValue || {}).includes('slug');
+      if (!duplicateSlug || attempt === 7) throw error;
     }
-    return created;
-  });
+  }
   logAudit({ req, action: 'PRODUCT_CREATE', entityType: 'Product', entityId: product._id, storeId: product.storeId, after: auditSnapshot(product, PRODUCT_AUDIT_FIELDS) });
   res.status(201).json(normalizeProductResponse(product, req));
 });
@@ -550,13 +569,16 @@ exports.updateProduct = asyncHandler(async (req, res) => {
   const existingProduct = await Product.findOne(catalogQuery(req, { _id: req.params.id }));
   if (!existingProduct) return res.status(404).json({ message: 'Product not found' });
   assertStoreOwned(existingProduct, req);
+  if (req.importExpectedUpdatedAt && new Date(req.importExpectedUpdatedAt).getTime() !== existingProduct.updatedAt.getTime()) {
+    throw new ApiError('INVENTORY_CHANGED', 'This product changed after import preview. Validate and approve the row again.');
+  }
   await require('../services/storefrontDiscoveryService').validateComplements(req, req.body || {}, existingProduct._id, existingProduct.storeId);
   const expectedInventoryRevision = req.body?.inventoryRevision === undefined ? null : Number(req.body.inventoryRevision);
   if (expectedInventoryRevision !== null && (!Number.isSafeInteger(expectedInventoryRevision) || expectedInventoryRevision < 0)) return res.status(400).json({ message: 'Inventory revision must be a whole number of zero or more' });
   if (expectedInventoryRevision !== null && expectedInventoryRevision !== Number(existingProduct.inventoryRevision || 0)) {
     throw new ApiError('INVENTORY_CHANGED', 'Inventory changed after this product was opened. Reload the product before saving.');
   }
-  const basePayload = await applyProductStructure(withStoreId({ ...req.body, images: sanitizeProductImages(req.body.images) }, req), existingProduct);
+  const basePayload = await applyProductStructure(withStoreId({ ...clientProductFields(req.body), images: sanitizeProductImages(req.body.images) }, req), existingProduct);
   delete basePayload.inventoryRevision;
   if (basePayload.price !== undefined && basePayload.originalPrice === undefined && Number(basePayload.price) > Number(existingProduct.originalPrice || 0)) {
     basePayload.originalPrice = basePayload.price;
@@ -582,11 +604,12 @@ exports.updateProduct = asyncHandler(async (req, res) => {
       slug: slugify(payload.slug || existingProduct.slug || payload.name || existingProduct.name),
       images: nextImages,
       storeId: existingProduct.storeId,
+      ...(req.importOperationId ? { lastBulkImportOperation: req.importOperationId } : {}),
       inventoryRevision: currentRevision + (inventoryChanged ? 1 : 0),
       ...(inventoryChanged ? { lastInventoryChangeAt: new Date(), lastInventoryChangedBy: req.user?._id } : {}),
     });
     const saved = await Product.findOneAndUpdate(
-      catalogQuery(req, withInventoryRevision({ _id: req.params.id }, currentRevision)),
+      catalogQuery(req, withInventoryRevision({ _id: req.params.id, ...(req.importExpectedUpdatedAt ? { updatedAt: req.importExpectedUpdatedAt } : {}) }, currentRevision)),
       update,
       { new: true, runValidators: true, session },
     );
@@ -899,24 +922,24 @@ async function validateUniqueProductIdentity(req, payload = {}, excludeId) {
     excludeId,
   });
   const skuConflict = conflicts.find((item) => item.reason === 'SKU');
-  if (skuConflict) return `SKU is already used by ${skuConflict.name}`;
+  if (skuConflict) return `SKU is already used by ${skuConflict.isArchived ? 'archived product ' : ''}${skuConflict.name}${skuConflict.isArchived ? '. Restore that product or use a different SKU.' : ''}`;
   const barcodeConflict = conflicts.find((item) => item.reason === 'Barcode');
-  if (barcodeConflict) return `Barcode is already used by ${barcodeConflict.name}`;
+  if (barcodeConflict) return `Barcode is already used by ${barcodeConflict.isArchived ? 'archived product ' : ''}${barcodeConflict.name}${barcodeConflict.isArchived ? '. Restore that product or use a different barcode.' : ''}`;
   return '';
 }
 
 async function findProductConflicts(req, { name = '', sku = '', barcode = '', excludeId = null } = {}) {
-  const base = { isArchived: { $ne: true }, ...(excludeId ? { _id: { $ne: excludeId } } : {}) };
+  const base = { ...(excludeId ? { _id: { $ne: excludeId } } : {}) };
   const checks = [];
-  if (sku) checks.push(['SKU', Product.findOne(catalogQuery(req, { ...base, sku: { $regex: `^${escapeRegex(sku)}$`, $options: 'i' } })).select('_id name sku barcode').lean()]);
-  if (barcode) checks.push(['Barcode', Product.findOne(catalogQuery(req, { ...base, barcode })).select('_id name sku barcode').lean()]);
-  if (name.length >= 3) checks.push(['Name', Product.findOne(catalogQuery(req, { ...base, name: { $regex: `^${escapeRegex(name)}$`, $options: 'i' } })).select('_id name sku barcode').lean()]);
+  if (sku) checks.push(['SKU', Product.findOne(catalogQuery(req, { ...base, sku: { $regex: `^${escapeRegex(sku)}$`, $options: 'i' } })).select('_id name sku barcode isArchived').lean()]);
+  if (barcode) checks.push(['Barcode', Product.findOne(catalogQuery(req, { ...base, barcode })).select('_id name sku barcode isArchived').lean()]);
+  if (name.length >= 3) checks.push(['Name', Product.findOne(catalogQuery(req, { ...base, isArchived: { $ne: true }, name: { $regex: `^${escapeRegex(name)}$`, $options: 'i' } })).select('_id name sku barcode isArchived').lean()]);
   const resolved = await Promise.all(checks.map(async ([reason, query]) => [reason, await query]));
   const rows = new Map();
   for (const [reason, product] of resolved) {
     if (!product) continue;
     const key = String(product._id);
-    const current = rows.get(key) || { id: key, name: product.name, sku: product.sku || '', barcode: product.barcode || '', reasons: [], blocking: false };
+    const current = rows.get(key) || { id: key, name: product.name, sku: product.sku || '', barcode: product.barcode || '', isArchived: product.isArchived === true, reasons: [], blocking: false };
     current.reasons.push(reason);
     current.reason = current.reason || reason;
     if (reason !== 'Name') current.blocking = true;

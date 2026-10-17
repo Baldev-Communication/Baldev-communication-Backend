@@ -17,6 +17,12 @@ test('saree sizing is removed at the API boundary', () => {
   assert.equal(validateProductSizing(normalized, 'Sarees'), '');
 });
 
+test('products without garment sizes retain colour and technical variant inventory', () => {
+  const variants = [{ sku: 'PHONE-128', optionValues: { colour: 'Black', storage: '128', ram: '8' }, stock: 2 }, { sku: 'PHONE-256', optionValues: { colour: 'Blue', storage: '256', ram: '8' }, stock: 3 }];
+  const normalized = normalizeProductSizing({ name: 'Phone', sizingMode: 'free-size', sizeChartProfile: 'free-size', variants }, 'Mobiles');
+  assert.deepEqual(normalized.variants, variants); assert.deepEqual(normalized.sizes, []); assert.equal(validateProductSizing(normalized, 'Mobiles'), '');
+});
+
 test('a sized dress requires all category measurements', () => {
   const payload = {
     name: 'Pink Dress',

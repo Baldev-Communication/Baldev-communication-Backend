@@ -36,6 +36,7 @@ const sizeChartRowSchema = new mongoose.Schema({
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   sourceDraftId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductDraft', unique: true, sparse: true, default: undefined },
+  lastBulkImportOperation: { type: String, select: false },
   slug: { type: String, required: true },
   brand: { type: String, default: 'Baldev Communication' },
   shortDescription: String,

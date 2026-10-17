@@ -112,7 +112,13 @@ function normalizeImageForResponse(image, req) {
 }
 
 function normalizeProductImages(product, req) {
-  const data = typeof product.toObject === 'function' ? product.toObject() : { ...product };
+  const data = typeof product.toObject === 'function' ? product.toObject({ flattenMaps: true }) : { ...product };
+  if (data.attributeValues instanceof Map) data.attributeValues = Object.fromEntries(data.attributeValues);
+  if (Array.isArray(data.variants)) data.variants = data.variants.map(variant => {
+    const entry = typeof variant.toObject === 'function' ? variant.toObject({ flattenMaps: true }) : { ...variant };
+    if (entry.optionValues instanceof Map) entry.optionValues = Object.fromEntries(entry.optionValues);
+    return entry;
+  });
   const images = normalizeImageEntries(data.images).map((image) => normalizeImageForResponse(image, req));
   if (images.length) {
     const primaryIndex = images.findIndex((image) => image.primary);

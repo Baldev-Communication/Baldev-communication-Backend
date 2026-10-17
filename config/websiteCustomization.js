@@ -39,7 +39,7 @@ const DEFAULT_WEBSITE_CONFIG = {
     menuAlignment: 'left',
     sticky: true,
     announcementEnabled: true,
-    announcementText: 'Free Shipping Above ₹999',
+    announcementText: 'Delivery charges apply · Confirmed at checkout',
     announcementBackground: '#830b31',
     announcementTextColor: '#ffffff',
     announcementLink: '',

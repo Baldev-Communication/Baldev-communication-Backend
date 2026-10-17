@@ -18,8 +18,8 @@ function consumesQuantity(request) {
 }
 function returnEligibility(order, requests, configuration, now = Date.now()) {
   const delivered = deliveryDate(order);
-  const settings = configuration && typeof configuration === 'object' ? configuration : { returnWindowDays: configuration };
-  const returnsEnabled = settings.returnsEnabled !== false;
+  const settings = configuration && typeof configuration === 'object' ? configuration : { returnWindowDays: configuration, returnsEnabled: typeof configuration === 'number' };
+  const returnsEnabled = settings.returnsEnabled === true;
   const days = settings.returnWindowDays === null ? null : Math.max(0, Number(settings.returnWindowDays ?? 7));
   const eligibleStatus = POST_DELIVERY.includes(order.orderStatus) && (order.orderStatus === 'Delivered' || !!delivered || requests.length > 0);
   const items = (order.orderItems || []).map((item) => {
@@ -48,7 +48,7 @@ function returnEligibility(order, requests, configuration, now = Date.now()) {
   });
   const deadlines = items.map(item => item.deadline).filter(Boolean);
   const deadline = deadlines.length ? new Date(Math.max(...deadlines.map(value => new Date(value).getTime()))) : null;
-  return { windowDays: days, deliveredAt: delivered, deadline, items };
+  return { returnsEnabled, windowDays: returnsEnabled ? days : 0, deliveredAt: delivered, deadline: returnsEnabled ? deadline : null, items };
 }
 function returnOrderStatus(order, requests) {
   const active = requests.filter((request) => ['Requested', 'Approved', 'Pickup Scheduled', 'Picked Up', 'In Transit', 'Received', 'Inspection Pending', 'Verified', 'Mismatch Found', 'QC Passed', 'Refund Initiated', 'Exchange Allocated', 'Replacement Shipped', 'Replacement Delivered'].includes(request.status));

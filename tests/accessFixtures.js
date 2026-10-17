@@ -1,4 +1,3 @@
-const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const User = require('../models/User');
 const Store = require('../models/Store');
@@ -7,7 +6,6 @@ const { MASTER_OWNER_PHONE } = require('../config/masterOwner');
 const { generateToken } = require('../utils/generateToken');
 const { grantSellerMode } = require('../services/storeService');
 const { createCustomer } = require('./factories');
-const { request } = require('./helpers');
 
 // Represents an already verified owner session, without bypassing route guards.
 async function createMasterOwner() {
@@ -21,15 +19,14 @@ async function createMasterOwner() {
 
 async function createProvisionedSeller(name = 'Riya Fashion') {
   const { user, token } = await createCustomer();
-  const master = await createMasterOwner();
-  const created = await request('/api/stores', { method: 'POST', token: master.token,
-    body: { name, whatsappNumber: user.phone, instagramHandle: 'riya.styles' } });
-  assert.equal(created.status, 201);
-  // Seller assignment is test data: customers cannot self-provision stores.
-  await Store.updateOne({ _id: created.data.store.id }, { owner: user._id });
-  await StoreMember.create({ store: created.data.store.id, user: user._id, role: 'OWNER', status: 'ACTIVE' });
+  // The client installation no longer provisions stores through POST /stores.
+  // Provision isolated fixtures directly; upload requests still exercise the
+  // real authentication, membership, permissions and storage routes.
+  const store = await Store.create({ name, slug: `fixture-${crypto.randomUUID()}`, owner: user._id, whatsappNumber: user.phone,
+    industry: 'fashion', catalogStructure: require('../config/industryPresets').getIndustryPreset('fashion'), status: 'PUBLISHED' });
+  await StoreMember.create({ store: store._id, user: user._id, role: 'OWNER', status: 'ACTIVE' });
   await grantSellerMode(user._id);
-  return { user, token, store: created.data.store };
+  return { user, token, store: { ...store.toObject(), id: String(store._id) } };
 }
 
 module.exports = { createMasterOwner, createProvisionedSeller };

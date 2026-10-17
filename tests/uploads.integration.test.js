@@ -48,7 +48,7 @@ test('admin and seller multipart uploads retain playable media and provide retri
   const generated = spawnSync(require('ffmpeg-static'), ['-hide_banner','-loglevel','error','-y','-f','lavfi','-i','color=c=white:s=160x240:d=0.2','-pix_fmt','yuv420p',videoPath], { windowsHide: true, encoding: 'utf8' });
   assert.equal(generated.status, 0, generated.stderr);
   const video = await fs.readFile(videoPath);
-  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWP4cGDDhwMbGCAUAEOOCYEIRcH9AAAAAElFTkSuQmCC', 'base64');
   for (const actor of [{ route: '/api/admin/uploads', token: admin.token, headers: {} }, { route: '/api/seller/uploads', token: seller.token, headers: { 'x-store-id': seller.store.id } }]) {
     for (const media of [{ suffix: '', field: 'images', bytes: image, type: 'image/png', extension: 'png' }, { suffix: '/videos', field: 'videos', bytes: video, type: 'video/mp4', extension: 'mp4' }]) {
       const result = await upload(`${actor.route}${media.suffix}`, media.field, media.bytes, media.type, `${marker}.${media.extension}`, actor.token, actor.headers);
@@ -83,7 +83,7 @@ test('invalid media and missing files are explained as validation errors without
 
 test('review and return evidence photos require customer authentication and valid image bytes', async (t) => {
   const customer = await createCustomer();
-  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWP4cGDDhwMbGCAUAEOOCYEIRcH9AAAAAElFTkSuQmCC', 'base64');
   const unauthenticated = await upload('/api/reviews/uploads', 'images', png, 'image/png', 'review.png');
   assert.equal(unauthenticated.status, 401);
   const spoofed = await upload('/api/reviews/uploads', 'images', Buffer.from('not-an-image'), 'image/png', 'spoofed.png', customer.token);
@@ -110,7 +110,7 @@ test('review and return evidence photos require customer authentication and vali
 test('bulk-uploaded draft photos remain available through editing and publication with local storage', async (t) => {
   const admin = await createAdmin();
   const marker = `qa-bulk-${crypto.randomUUID()}`;
-  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWP4cGDDhwMbGCAUAEOOCYEIRcH9AAAAAElFTkSuQmCC', 'base64');
   const result = await upload('/api/admin/product-drafts/bulk-upload', 'images', image, 'image/png', `${marker}.png`, admin.token);
   assert.equal(result.status, 201, JSON.stringify(result.data));
   const draft = result.data.data.drafts[0];
@@ -136,7 +136,7 @@ test('bulk-uploaded draft photos remain available through editing and publicatio
 test('one upload creates independent four, three and two photo drafts with mobile model seeds', async (t) => {
   const admin = await createAdmin();
   const category = await require('../models/Category').create({ name: 'Smartphones', slug: 'smartphones', definitionKey: 'smartphones' });
-  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWP4cGDDhwMbGCAUAEOOCYEIRcH9AAAAAElFTkSuQmCC', 'base64');
   const body = new FormData();
   for (let index = 0; index < 9; index++) body.append('images', new Blob([image], { type: 'image/png' }), `group-${index}.png`);
   body.append('groupMode', 'grouped');
@@ -171,6 +171,7 @@ test('one upload creates independent four, three and two photo drafts with mobil
 
 test('quick photo analysis sends the actual uploaded image, maps categories and leaves commercial fields manual', async (t) => {
   const admin = await createAdmin(), seller = await createProvisionedSeller('Photo Analysis Store');
+  await require('../models/Store').updateOne({ _id: seller.store.id }, { $set: { plan: 'PROFESSIONAL' } });
   assert.equal((await request('/api/admin/products/quick-analyze/status', { token: admin.token })).data.enabled, false);
   const unavailable = await request('/api/admin/products/quick-analyze', { method: 'POST', token: admin.token, body: {} });
   assert.equal(unavailable.status, 200); assert.equal(unavailable.data.enabled, false);
@@ -178,7 +179,7 @@ test('quick photo analysis sends the actual uploaded image, maps categories and 
   t.after(() => { delete process.env.GEMINI_API_KEY; });
   const marker = `qa-analysis-${crypto.randomUUID()}.png`;
   const filePath = path.join(__dirname, '..', 'uploads', marker);
-  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEklEQVQImWP4cGDDhwMbGCAUAEOOCYEIRcH9AAAAAElFTkSuQmCC', 'base64');
   await fs.writeFile(filePath, image);
   t.after(() => fs.unlink(filePath).catch(() => null));
   const originalFetch = global.fetch;

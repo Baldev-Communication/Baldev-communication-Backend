@@ -23,8 +23,16 @@ function errorHandler(error, req, res, next) { // eslint-disable-line no-unused-
     if ((error.keyPattern?.active && error.keyPattern?.orderItemId) || String(error.message || '').includes('one_active_return_per_order_item')) {
       return send(res, 409, 'DUPLICATE_REQUEST', 'An active return or exchange already exists for this order item.');
     }
-    const field = Object.keys(error.keyValue || {})[0] || 'field';
-    return send(res, 400, 'DUPLICATE_KEY', `${field} already exists`);
+    const fields = Object.keys(error.keyPattern || error.keyValue || {});
+    const field = fields.find(key => !['storeId', 'tenantId', '_id'].includes(key)) || fields.find(key => key === '_id');
+    const messages = {
+      sku: 'SKU is already in use. Enter a different SKU.',
+      barcode: 'Barcode is already in use. Enter a different barcode.',
+      slug: 'This URL is already in use. Enter a different URL slug.',
+      sourceDraftId: 'This draft already has a published product. Open that product to edit it.',
+      _id: 'This record already exists. Reload the latest record before trying again.',
+    };
+    return send(res, 409, 'DUPLICATE_KEY', messages[field] || (field ? `${field} already exists` : 'This record already exists. Check for an existing record before saving.'));
   }
   if (error.name === 'ValidationError') {
     return send(res, 400, 'VALIDATION_ERROR', Object.values(error.errors).map((item) => item.message).join(', '));

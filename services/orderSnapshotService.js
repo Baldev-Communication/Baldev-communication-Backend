@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { normalizeIndianMobile } = require('../utils/phoneUtils');
 const { locationPoint } = require('./localDeliveryService');
 const { ApiError } = require('../utils/apiError');
+const { NO_RETURNS } = require('./baldevStorePolicy');
 
 function snapshotAddress(address = {}) {
   const source = address && typeof address === 'object' ? address : {};
@@ -28,7 +29,7 @@ function invoiceNumberForId(orderId, settings = {}) {
   return `${prefix}-${String(orderId).slice(-8).toUpperCase()}`;
 }
 
-function snapshotOrderItems(items = []) {
+function snapshotOrderItems(items = [], settings) {
   return items.map((item) => {
     const unitPrice = Number(item.price || 0);
     const unitMrp = Number(item.originalPrice || item.price || 0);
@@ -48,10 +49,10 @@ function snapshotOrderItems(items = []) {
       tax: Number(item.tax || 0),
       category: item.category,
       shippingWeightKg: Number(item.shippingWeightKg || 0),
-      returnable: item.returnable !== false,
-      exchangeable: item.exchangeable !== false,
-      returnWindowDays: item.returnWindowDays !== null && item.returnWindowDays !== undefined && Number.isFinite(Number(item.returnWindowDays)) ? Number(item.returnWindowDays) : undefined,
-      returnPolicy: String(item.returnPolicy || '').trim(),
+      returnable: settings && settings.returnsEnabled !== true ? false : item.returnable !== false,
+      exchangeable: settings && settings.returnsEnabled !== true ? false : item.exchangeable !== false,
+      returnWindowDays: settings && settings.returnsEnabled !== true ? 0 : item.returnWindowDays !== null && item.returnWindowDays !== undefined && Number.isFinite(Number(item.returnWindowDays)) ? Number(item.returnWindowDays) : undefined,
+      returnPolicy: settings && settings.returnsEnabled !== true ? NO_RETURNS : String(item.returnPolicy || '').trim(),
     };
   });
 }
@@ -62,16 +63,16 @@ function buildPersistedOrderFields({ userId, draft, shippingAddress, billingAddr
   return {
     _id: id,
     user: userId,
-    orderItems: snapshotOrderItems(draft.items),
+    orderItems: snapshotOrderItems(draft.items, draft.settings || {}),
     shippingAddress: shipping,
     shippingQuote: draft.shippingQuote || undefined,
     billingAddress: snapshotAddress(billingAddress || shippingAddress),
     invoiceNumber: invoiceNumberForId(id, draft.settings),
     invoiceDate: extra.invoiceDate || new Date(),
-    invoiceSeller: Object.fromEntries(['storeName', 'legalBusinessName', 'gstin', 'contactEmail', 'contactPhone', 'whatsappNumber', 'address', 'billingAddress', 'returnPolicy', 'logoUrl', 'invoiceNote'].map((key) => [key, String(draft.settings?.[key] || '').trim()])),
+    invoiceSeller: Object.fromEntries(['storeName', 'legalBusinessName', 'gstin', 'contactEmail', 'contactPhone', 'whatsappNumber', 'address', 'billingAddress', 'returnPolicy', 'logoUrl', 'invoiceNote'].map((key) => [key, key === 'returnPolicy' && draft.settings?.returnsEnabled !== true ? NO_RETURNS : String(draft.settings?.[key] || '').trim()])),
     returnPolicySnapshot: {
       capturedAt: new Date(),
-      returnsEnabled: draft.settings?.returnsEnabled !== false,
+      returnsEnabled: draft.settings?.returnsEnabled === true,
       returnWindowDays: draft.settings?.returnWindowDays === null ? null : Math.max(0, Number(draft.settings?.returnWindowDays ?? 7)),
       refundDeliveryChargeOnFullReturn: draft.settings?.refundDeliveryChargeOnFullReturn === true,
       refundPlatformFeeOnFullReturn: draft.settings?.refundPlatformFeeOnFullReturn === true,

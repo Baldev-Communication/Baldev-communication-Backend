@@ -62,7 +62,7 @@ test('refund estimates allocate discounts and apply purchase-time return charges
 });
 test('eligibility endpoint scopes both order and requests to the signed-in customer', async (t) => {
   t.mock.method(Order, 'findOne', async (filter) => { assert.equal(filter.user, userId); return delivered(); });
-  t.mock.method(Settings, 'findOne', () => ({ lean: async () => ({ returnWindowDays: 7 }) }));
+  t.mock.method(Settings, 'findOne', () => ({ lean: async () => ({ returnWindowDays: 7, returnsEnabled: true }) }));
   t.mock.method(ReturnExchange, 'find', (filter) => { assert.equal(filter.user, userId); assert.equal(filter.order, orderId); return { sort: async () => [] }; });
   const { res, error } = await invoke(returns.orderReturns, { params: { orderId }, user: { _id: userId } });
   assert.equal(error, undefined); assert.equal(res.body.items.length, 2);
@@ -80,7 +80,7 @@ test('return submission checks product identity even when an order-item ID is pr
 test('a second line can be returned after the first line has a request', async (t) => {
   const order = { ...delivered(), orderStatus: 'Return Requested' };
   t.mock.method(Order, 'findOne', async () => order);
-  t.mock.method(Settings, 'findOne', () => ({ lean: async () => ({ returnWindowDays: 7 }) }));
+  t.mock.method(Settings, 'findOne', () => ({ lean: async () => ({ returnWindowDays: 7, returnsEnabled: true }) }));
   t.mock.method(ReturnExchange, 'find', async () => [{ orderItemId: first._id, quantity: 2, status: 'Requested' }]);
   t.mock.method(ReturnExchange, 'create', async (payload) => ({ ...payload, _id: 'request' }));
   const { res, error } = await invoke(returns.createReturn, { body: { order: orderId, product: productId, orderItemId: second._id, type: 'return', reason: 'Size issue', quantity: 1 }, user: { _id: userId } });
@@ -88,7 +88,7 @@ test('a second line can be returned after the first line has a request', async (
 });
 test('server rejects a duplicate item return even if the frontend button was stale', async (t) => {
   t.mock.method(Order, 'findOne', async () => delivered());
-  t.mock.method(Settings, 'findOne', () => ({ lean: async () => ({ returnWindowDays: 7 }) }));
+  t.mock.method(Settings, 'findOne', () => ({ lean: async () => ({ returnWindowDays: 7, returnsEnabled: true }) }));
   t.mock.method(ReturnExchange, 'find', async () => [{ orderItemId: first._id, quantity: 2, status: 'Closed' }]);
   const { error } = await invoke(returns.createReturn, { body: { order: orderId, product: productId, orderItemId: first._id, type: 'return', reason: 'Size issue' }, user: { _id: userId } });
   assert.equal(error.errorCode, 'DUPLICATE_REQUEST');

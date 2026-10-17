@@ -109,6 +109,7 @@ app.use('/api/admin/customer-crm', protect, adminOnly, optionalResolveStore, req
 app.use('/api/admin', require('./routes/adminAuthRoutes'));
 app.use('/api/admin/smart-fill', protect, adminOnly, optionalResolveStore, requireAdminCustomerStoreAccess, require('./routes/workflowSmartFillRoutes'));
 app.use('/api/admin/products', protect, adminOnly, require('./routes/adminProductRoutes'));
+app.use('/api/admin/product-imports', require('./modules/bulk-product-import/routes'));
 app.use('/api/admin/categories', protect, adminOnly, require('./routes/categoryRoutes'));
 app.use('/api/admin/orders', protect, adminOnly, require('./routes/orderRoutes'));
 app.use('/api/admin/coupons', protect, adminOnly, optionalResolveStore, requireAdminCustomerStoreAccess, require('./routes/couponRoutes'));

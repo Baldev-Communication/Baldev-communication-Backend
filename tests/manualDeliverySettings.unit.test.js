@@ -43,7 +43,7 @@ test('switching manual defaults only changes supplied settings, keeping legacy d
 
 test('manual modes retain fixed charges, free shipping and destination weight pricing', () => {
   for (const manualDeliveryMode of ['COURIER', 'SELF']) {
-    const settings = { shippingProvider: 'manual', manualDeliveryMode, deliveryCharge: 75, freeShippingMinAmount: 1000 };
+    const settings = { shippingProvider: 'manual', manualDeliveryMode, deliveryCharge: 75, freeShippingMinAmount: 1000, shippingFreeAboveEnabled: true };
     assert.deepEqual(deliveryPrice(500, { pincode: '110001' }, {}, settings), { charge: 75, pricingSource: 'fixed' });
     assert.deepEqual(deliveryPrice(1000, { pincode: '110001' }, {}, settings), { charge: 0, pricingSource: 'free-threshold' });
     const weighted = { ...settings, shippingFreeAboveEnabled: false, shippingPricingMode: 'weight', shippingRateZones: [{ prefix: '110', baseCharge: 40, additionalStepCharge: 20 }] };

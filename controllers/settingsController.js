@@ -52,6 +52,8 @@ exports.getPaymentMethods = asyncHandler(async (req, res) => {
     deliveryCharge: Number(settings.deliveryCharge ?? 99),
     delivery: require('../services/localDeliveryService').publicDeliveryConfig(settings),
     freeShippingMinAmount: Number(settings.freeShippingMinAmount ?? 999),
+    shippingFreeAboveEnabled: settings.shippingFreeAboveEnabled === true,
+    shippingPricingMode: settings.shippingPricingMode || 'fixed',
     platformFee: Number(settings.platformFee ?? 23),
     gstRate: Number(settings.gstRate ?? 5),
     gateway: {
@@ -81,6 +83,7 @@ exports.getPaymentReadiness = asyncHandler(async (req, res) => {
 
 exports.updateSettings = asyncHandler(async (req, res) => {
   const { _id, __v, createdAt, updatedAt, expectedUpdatedAt, storeId, ...input } = req.body || {};
+  if ('storePolicyVersion' in input) throw new ApiError('FORBIDDEN', 'Store policy migration metadata cannot be changed here');
   const previous = await Settings.findOne(req.tenantFilter || {});
   const current = previous?.toObject() || {};
   if (storeId && String(storeId) !== String(current.storeId || '')) throw new ApiError('FORBIDDEN', 'Store identity cannot be changed here');

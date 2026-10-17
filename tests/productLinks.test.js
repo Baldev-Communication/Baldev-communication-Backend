@@ -3,10 +3,15 @@ const assert = require('node:assert/strict');
 const { request, resetDatabase, startTestEnvironment, stopTestEnvironment } = require('./helpers');
 const { createAdmin, createProduct } = require('./factories');
 const Category = require('../models/Category');
+const Configuration = require('../models/MasterConfiguration');
+const { getIndustryPreset } = require('../config/industryPresets');
 
 test.before(startTestEnvironment);
 test.after(stopTestEnvironment);
-test.beforeEach(resetDatabase);
+test.beforeEach(async () => {
+  await resetDatabase();
+  await Configuration.create({ structure: getIndustryPreset('fashion') });
+});
 
 test('public product lookup tolerates whitespace and case in a legacy slug', async () => {
   const product = await createProduct({ slug: 'Royal-Silk-Saree ' });

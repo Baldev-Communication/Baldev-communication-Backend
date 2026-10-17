@@ -173,7 +173,7 @@ test('an unknown payment method is rejected', async () => {
 });
 
 test('free shipping applies above the configured threshold', async () => {
-  await setSettings({ codEnabled: true, codCharge: 0, deliveryCharge: 99, freeShippingMinAmount: 999 });
+  await setSettings({ codEnabled: true, codCharge: 0, deliveryCharge: 99, freeShippingMinAmount: 999, shippingFreeAboveEnabled: true });
   const { token } = await createCustomer();
   const cheap = await createProduct({ price: 500, originalPrice: 500, stock: 5 });
   const pricey = await createProduct({ price: 1500, originalPrice: 1500, stock: 5 });

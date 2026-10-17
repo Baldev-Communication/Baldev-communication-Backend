@@ -1,7 +1,7 @@
 const { ApiError } = require('../utils/apiError');
 
 const DEFAULTS = {
-  shippingProvider: 'manual', manualDeliveryMode: 'COURIER', shippingPricingMode: 'fixed', shippingFreeAboveEnabled: true,
+  shippingProvider: 'manual', manualDeliveryMode: 'COURIER', shippingPricingMode: 'fixed', shippingFreeAboveEnabled: false,
   shippingDefaultWeightKg: 0.5, shippingLengthCm: 30, shippingWidthCm: 25, shippingHeightCm: 5,
   shippingVolumetricDivisor: 5000, shippingWeightStepKg: 0.5, shippingAdditionalStepCharge: 0,
   shippingRateZones: [], shippingPickup: {},

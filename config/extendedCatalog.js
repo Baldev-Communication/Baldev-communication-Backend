@@ -11,14 +11,14 @@ const notes = (key, label) => field(key, label, 'textarea');
 const yesNo = (key, label) => field(key, label, 'boolean');
 const power = [number('power_consumption', 'Rated power', 'W'), field('voltage', 'Rated voltage / frequency')];
 const common = [
-  field('brand', 'Brand'), field('model', 'Model / model number'),
+  field('brand', 'Brand', 'text', { filterable: true }), field('model', 'Model / model number'),
   { ...choice('condition', 'Condition', ['New', 'Refurbished', 'Used']), required: true },
   field('warranty', 'Warranty period'), field('dimensions', 'Product dimensions (include unit)'),
   number('weight', 'Product weight', 'kg'), notes('box_contents', 'Included components'),
 ];
-const template = (key, name, attributes) => ({
+const template = (key, name, attributes, overrides = {}) => ({
   key, name, parentKey: '', active: true,
-  attributes: [...common, ...attributes].map((item, index) => ({ ...item, sortOrder: 100 + index })),
+  attributes: [...common.map(item => ({ ...item, ...overrides[item.key] })), ...attributes].map((item, index) => ({ ...item, sortOrder: 100 + index })),
   variantAttributes: ['colour'], filters: ['brand', 'price', 'availability'],
 });
 const audio = [
@@ -28,6 +28,43 @@ const audio = [
   yesNo('microphone', 'Microphone'), field('water_resistance', 'Water resistance rating'),
 ];
 const templates = [
+  template('watches', 'Watches (digital & analogue)', [
+    choice('watch_type', 'Watch type', ['Digital', 'Analogue', 'Analogue-digital']),
+    field('movement', 'Movement'), field('display_type', 'Display type'),
+    field('case_material', 'Case material'), field('case_shape', 'Case shape'),
+    number('case_diameter', 'Case diameter', 'mm'), number('case_thickness', 'Case thickness', 'mm'),
+    field('strap_material', 'Strap material'), number('strap_width', 'Strap width', 'mm'),
+    field('strap_size', 'Strap / wrist size'), field('clasp_type', 'Clasp type'),
+    field('dial_colour', 'Dial colour'), field('water_resistance', 'Water resistance rating'),
+    field('power_source', 'Power source / battery type'), field('battery_life', 'Battery life (include unit)'),
+    yesNo('backlight', 'Backlight'), yesNo('alarm', 'Alarm'), yesNo('stopwatch', 'Stopwatch'),
+    yesNo('date_display', 'Date display'), notes('features', 'Additional features'),
+  ], { weight: { unit: 'g' } }),
+  template('hair_dryers', 'Hair dryers', [
+    ...power, field('motor_type', 'Motor type'), number('speed_settings', 'Speed settings'),
+    number('heat_settings', 'Heat settings'), yesNo('cool_shot', 'Cool shot'),
+    yesNo('ionic_technology', 'Ionic technology'), field('attachments', 'Nozzles / attachments'),
+    yesNo('foldable_handle', 'Foldable handle'), number('cord_length', 'Cord length', 'm'),
+    field('airflow', 'Airflow (include unit)'), notes('safety_features', 'Safety features'),
+    notes('usage_instructions', 'Use and care'),
+  ]),
+  template('personal_care', 'Trimmers, shavers & personal care', [
+    field('product_type', 'Personal care product type'), ...power,
+    field('blade_material', 'Blade / plate material'), field('length_settings', 'Length / temperature settings'),
+    field('operating_mode', 'Corded / cordless operation'), number('battery_life', 'Runtime', 'min'),
+    field('charging_time', 'Charging time'), field('water_resistance', 'Water resistance / washable parts'),
+    field('attachments', 'Attachments'), notes('safety_features', 'Safety features'), notes('usage_instructions', 'Use and care'),
+  ]),
+  template('torches_lights', 'Torches & emergency lights', [
+    field('light_type', 'Torch / light type'), field('light_source', 'Light source'),
+    number('light_output', 'Light output', 'lm'), number('beam_distance', 'Beam distance', 'm'),
+    number('output_power', 'Light power', 'W'), field('lighting_modes', 'Lighting modes'),
+    field('charging_method', 'Charging method'), yesNo('solar_charging', 'Solar charging'),
+    number('battery_capacity', 'Battery capacity', 'mAh'), field('battery_type', 'Battery type'),
+    field('battery_life', 'Runtime (include mode)'), field('charging_time', 'Charging time'),
+    field('water_resistance', 'Water resistance rating'), field('material', 'Body material'),
+    notes('safety_features', 'Safety features'), notes('usage_instructions', 'Use and care'),
+  ]),
   template('general_products', 'Other products / custom specifications', [
     field('product_type', 'Product type'), field('material', 'Material'), field('capacity', 'Capacity (include unit)'),
     notes('features', 'Features'), notes('usage_instructions', 'Use and care'),
@@ -145,7 +182,10 @@ const templates = [
   template('power_banks', 'Power banks', [
     number('battery_capacity', 'Battery capacity', 'mAh'), number('output_power', 'Maximum output power', 'W'),
     field('ports', 'Input / output ports'), field('charging_protocols', 'Charging protocols'),
-    field('battery_type', 'Battery type'), notes('safety_features', 'Safety features'),
+    field('battery_type', 'Battery type'), number('input_power', 'Maximum input power', 'W'),
+    number('port_count', 'Number of output ports'), field('charging_time', 'Charging time'),
+    yesNo('wireless_charging', 'Wireless charging'), field('indicator', 'Charge indicator'),
+    notes('safety_features', 'Safety features'),
   ]),
   template('cables_adapters', 'Cables & adapters', [
     field('connector_type', 'Connectors (input / output)'), number('cable_length', 'Cable length', 'm'),
@@ -154,6 +194,26 @@ const templates = [
   ]),
 ];
 
+// Matching terms identify a specification template, never a particular model.
+const aliases = {
+  smart_watches: ['smartwatch', 'smartwatches', 'smart watch', 'apple watch', 'galaxy watch', 'pixel watch'],
+  watches: ['watch', 'watches', 'digital watch', 'digital watches', 'wristwatch', 'wrist watch', 'analog watch', 'analogue watch'],
+  hair_dryers: ['hair dryer', 'hairdryer', 'blow dryer', 'hair dryers'],
+  personal_care: ['trimmer', 'shaver', 'hair straightener', 'hair curler', 'personal care'],
+  torches_lights: ['torch', 'torches', 'solar torch', 'flashlight', 'emergency light', 'rechargeable light'],
+  power_banks: ['power bank', 'powerbank', 'battery bank', 'bettery bank'],
+  televisions: ['tv', 'television'], speakers: ['speaker', 'soundbar'],
+  headphones: ['headphone', 'headset'], earphones: ['earphone', 'earbud'],
+  screen_protectors: ['screen guard', 'screenguard', 'screen protector', 'tempered glass'],
+  irons: ['electric iron', 'steam iron', 'dry iron', 'garment steamer'],
+  washing_machines: ['washing machine'], pressure_cookers: ['pressure cooker', 'cooker', 'kukar'],
+  mixer_grinders: ['mixer grinder', 'mixer', 'blender', 'juicer', 'mixie'],
+  refrigerators: ['refrigerator', 'fridge', 'freezer'], air_conditioners: ['air conditioner'],
+  fans_coolers: ['ceiling fan', 'table fan', 'air cooler'], microwave_ovens: ['microwave', 'air fryer', 'oven'],
+  cooktops: ['cooktop', 'induction stove', 'gas stove'], kettles_rice_cookers: ['kettle', 'rice cooker'],
+  water_purifiers: ['water purifier'], laptops: ['laptop', 'computer'], cables_adapters: ['usb cable', 'adapter'],
+};
+
 function expandCatalog(structure) {
   if (!structure || !['mobile', 'electronics'].includes(structure.industry || structure.id)) return structure;
   const definitions = [...(structure.categoryDefinitions || [])];
@@ -161,15 +221,16 @@ function expandCatalog(structure) {
     const index = definitions.findIndex(item => item.key === addition.key);
     if (index < 0) {
       const modelNumber = (structure.attributes || []).find(item => item.key === 'model_number');
-      definitions.push(modelNumber ? { ...addition, attributes: [...addition.attributes, { ...modelNumber, required: false }] } : addition);
+      const expanded = { ...addition, aliases: aliases[addition.key] || [] };
+      definitions.push(modelNumber ? { ...expanded, attributes: [...addition.attributes, { ...modelNumber, required: false }] } : expanded);
     }
     else {
       const saved = definitions[index];
       const keys = new Set([...(structure.attributes || []).map(item => item.key), ...(saved.attributes || []).map(item => typeof item === 'string' ? item : item.key)]);
-      definitions[index] = { ...saved, attributes: [...(saved.attributes || []), ...addition.attributes.filter(item => !keys.has(item.key))] };
+      definitions[index] = { ...saved, aliases: [...new Set([...(saved.aliases || []), ...(aliases[addition.key] || [])])], attributes: [...(saved.attributes || []), ...addition.attributes.filter(item => !keys.has(item.key))] };
     }
   }
-  return { ...structure, categoryDefinitions: definitions };
+  return { ...structure, categoryDefinitions: definitions.map(item => aliases[item.key] ? { ...item, aliases: [...new Set([...(item.aliases || []), ...aliases[item.key]])] } : item) };
 }
 
 module.exports = { expandCatalog };

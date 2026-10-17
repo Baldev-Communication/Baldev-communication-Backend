@@ -2,6 +2,16 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { modelIdentity, normalizeGroundedSpecs, researchProductSpecs } = require('../services/productWebSpecs.service');
 
+test('watch research accepts an explicitly branded numeric model and requests a model for a generic digital watch', () => {
+  const watchAttributes = [{ key: 'model' }, { key: 'watch_type' }, { key: 'brand' }];
+  const exact = modelIdentity({ attributes: watchAttributes, existing: { brand: 'Titan', attributeValues: { model: '1806' } } });
+  assert.equal(exact.model, 'Titan 1806');
+  assert.equal(exact.kind, 'electronics');
+  assert.equal(exact.needsModel, undefined);
+  const generic = modelIdentity({ attributes: watchAttributes, existing: { brand: 'Casio', name: 'Casio digital watch' } });
+  assert.equal(generic.needsModel, true);
+});
+
 const attributes = [
   { key: 'model', label: 'Model', type: 'text' },
   { key: 'ram', label: 'RAM', type: 'dropdown', options: ['4', '6', '8'], unit: 'GB' },
@@ -13,6 +23,39 @@ const attributes = [
   { key: 'condition', label: 'Condition', type: 'text' },
 ];
 const uri = 'https://example.com/galaxy-a15';
+
+test('generic appliance names can be researched without treating a price as the model or watts', () => {
+  const { DEFAULT_STRUCTURE } = require('../config/industryPresets');
+  const { configuredAttributes } = require('../services/productAttributes');
+  for (const [name, expected] of [
+    ['Havells hair dryer 2000W 2100/-', 'Havells hair dryer 2000W'],
+    ['Havells hair dryer 1200/-', 'Havells hair dryer'],
+    ['Bajaj solar torch 900/-', 'Bajaj solar torch'],
+  ]) {
+    const fields = configuredAttributes(DEFAULT_STRUCTURE, [], { name });
+    const identity = modelIdentity({ existing: { name }, attributes: fields });
+    assert.equal(identity?.kind, 'electronics', name);
+    assert.equal(identity.model, expected, name);
+    assert.equal(identity.needsModel, true, name);
+    assert.equal(modelIdentity({ existing: { name, attributeValues: { model: '2000W' } }, attributes: fields }), null, 'A rated wattage cannot serve as an exact model');
+    assert.deepEqual(normalizeGroundedSpecs(grounded([`model: ${expected}`, 'power_consumption: 2000 W']), identity, fields).suggestion, {}, 'A generic model label still cannot verify specific hardware');
+    const different = normalizeGroundedSpecs(grounded(['model: Some different HD123 model', 'power_consumption: 2000 W']), identity, fields);
+    assert.deepEqual(different.suggestion, {}, name);
+    assert.match(different.warning, /exact model/);
+  }
+});
+
+test('verified hair dryer and torch details keep their units and exclude phone specifications', () => {
+  const { DEFAULT_STRUCTURE } = require('../config/industryPresets');
+  const { configuredAttributes } = require('../services/productAttributes');
+  const fields = configuredAttributes(DEFAULT_STRUCTURE, [], { categoryDefinitionKey: 'hair_dryers' });
+  const result = normalizeGroundedSpecs(grounded(['model: Example HD123', 'brand: Example', 'power_consumption: 2000 W', 'heat_settings: 3', 'cool_shot: Yes', 'dimensions: 20 x 10 x 25 cm', 'ram: 8 GB']), { model: 'Example HD123', kind: 'electronics' }, fields);
+  assert.equal(result.suggestion.attributeValues.power_consumption, '2000');
+  assert.equal(result.suggestion.attributeValues.heat_settings, '3');
+  assert.equal(result.suggestion.attributeValues.cool_shot, 'true');
+  assert.equal(result.suggestion.attributeValues.ram, undefined);
+  assert.match(result.suggestion.description, /Rated power: 2000 W/);
+});
 
 test('Smart Fill includes category-specific mobile attributes', () => {
   const { configuredAttributes } = require('../controllers/productSmartFillController');
@@ -32,6 +75,19 @@ function grounded(lines, cited = lines.map((_, index) => index)) {
   });
   return { text, groundingMetadata: { groundingChunks: [{ web: { uri, title: 'Manufacturer specs' } }], groundingSupports: supports } };
 }
+
+test('contradictory cited specifications remain explicit choices and never enter generated descriptions', () => {
+  const result = normalizeGroundedSpecs(grounded(['model: Samsung Galaxy A15', 'brand: Samsung', 'processor: Chip A', 'processor: Chip B', 'battery: 5000 mAh', 'battery: 5000.0 mAh']), { model: 'Samsung Galaxy A15' }, attributes);
+  assert.equal(result.suggestion.attributeValues.processor, undefined);
+  assert.equal(result.fieldSources['attribute.processor'], undefined);
+  assert.equal(result.conflicts.length, 1);
+  assert.deepEqual(result.conflicts[0].candidates.map(item => item.value), ['Chip A', 'Chip B']);
+  assert.ok(result.conflicts[0].candidates.every(item => item.url === uri && item.quote));
+  assert.equal(result.suggestion.attributeValues.battery, '5000');
+  assert.doesNotMatch(result.suggestion.description, /Chip [AB]/);
+  const mixed = normalizeGroundedSpecs(grounded(['model: Samsung Galaxy A15', 'model: Samsung Galaxy A25', 'processor: Chip B']), { model: 'Samsung Galaxy A15' }, attributes);
+  assert.deepEqual(mixed.suggestion, {}); assert.match(mixed.warning, /different model/);
+});
 
 test('appliance identity and cited specifications use the selected template and preserve TV screen keys', () => {
   const { DEFAULT_STRUCTURE } = require('../config/industryPresets');

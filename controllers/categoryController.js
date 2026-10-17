@@ -1,3 +1,4 @@
+const { categoryDescendantIds } = require('../services/categoryHierarchy');
 const mongoose = require('mongoose');
 const Category = require('../models/Category');
 const Product = require('../models/Product');
@@ -105,12 +106,13 @@ async function enrichCategories(categories, req) {
   const childMap = new Map(children.map((item) => [String(item._id), item.childCount]));
   return categories.map((category) => {
     const data = category.toObject ? category.toObject() : category;
-    const counts = productMap.get(String(data._id)) || {};
+    const descendantIds = categoryDescendantIds([data._id], categories);
+    const counts = descendantIds.reduce((sum, id) => ({ productCount: sum.productCount + Number(productMap.get(id)?.productCount || 0), activeProductCount: sum.activeProductCount + Number(productMap.get(id)?.activeProductCount || 0) }), { productCount: 0, activeProductCount: 0 });
     return {
       ...data,
       productCount: Number(counts.productCount || 0),
       activeProductCount: Number(counts.activeProductCount || 0),
-      draftCount: Number(draftMap.get(String(data._id)) || 0),
+      draftCount: descendantIds.reduce((sum, id) => sum + Number(draftMap.get(id) || 0), 0),
       childCount: Number(childMap.get(String(data._id)) || 0),
     };
   });
@@ -159,6 +161,9 @@ async function resolveParent(parentId, category, req) {
   if (category && String(parentId) === String(category._id)) throw new ApiError('VALIDATION_ERROR', 'A category cannot be its own parent');
   const parent = await Category.findOne(scoped(req, { _id: parentId, isArchived: { $ne: true } }));
   if (!parent) throw new ApiError('VALIDATION_ERROR', 'Choose an available parent category from this store');
+  const defaultStoreId = req.isDefaultStore || req.store?.isDefault ? String(req.store?._id || '') : '';
+  const destinationStore = category ? String(category.storeId || defaultStoreId) : String(req.store?._id || defaultStoreId);
+  if (destinationStore !== String(parent.storeId || defaultStoreId)) throw new ApiError('VALIDATION_ERROR', 'Parent and subcategory must belong to the same store');
   if (Number(parent.level || 0) >= 5) throw new ApiError('VALIDATION_ERROR', 'Category hierarchy can contain at most 6 levels');
   if (category) {
     const descendants = await descendantsOf(category._id, req);

@@ -100,8 +100,13 @@ function applyStorePresentation(config, settings = {}) {
     if (settings.contactDetailsEnabled && settings[field] !== undefined) result.footer[target] = settings[field];
   }
   if (settings.announcementEnabled !== undefined) result.header.announcementEnabled = settings.announcementEnabled;
-  if (settings.announcementText !== undefined) result.header.announcementText = settings.announcementText || (Number(settings.deliveryCharge ?? 99) === 0 || Number(settings.freeShippingMinAmount ?? 999) === 0 ? 'Free delivery on all orders' : `Free shipping on orders of ₹${Number(settings.freeShippingMinAmount ?? 999).toLocaleString('en-IN')} or more`);
-  if (!settings.announcementText && settings.shippingFreeAboveEnabled === false) result.header.announcementText = 'Delivery availability and charges confirmed at checkout';
+  const deliveryMessage = settings.shippingFreeAboveEnabled === true
+    ? (Number(settings.freeShippingMinAmount ?? 999) === 0 ? 'Free standard delivery' : `Free shipping on orders of ₹${Number(settings.freeShippingMinAmount ?? 999).toLocaleString('en-IN')} or more`)
+    : 'Delivery charges apply and are confirmed at checkout.';
+  if (settings.announcementText !== undefined) result.header.announcementText = settings.announcementText || deliveryMessage;
+  const announcement = result.header.announcementText || '';
+  if ((settings.shippingFreeAboveEnabled !== true && /free\s+(shipping|delivery)/i.test(announcement))
+    || (settings.returnsEnabled !== true && /\b(returns?|exchanges?)\b/i.test(announcement))) result.header.announcementText = deliveryMessage;
   return result;
 }
 module.exports = { normalizeSettingsUpdates, applyStorePresentation, TEXT_LIMITS, NUMBERS, BOOLEANS };

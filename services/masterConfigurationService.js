@@ -111,7 +111,7 @@ function cleanCategories(value, attributes) {
     const localKeys = new Set(localAttributes.map((entry) => typeof entry === 'string' ? entry : entry.key));
     const variants = cleanOptions(item.variantAttributes, 6);
     if (variants.some((entry) => !attributeKeys.has(entry) && !localKeys.has(entry))) bad(`${name} contains an unknown variant attribute`);
-    return { key, name, parentKey, active: item.active !== false, attributes: localAttributes, variantAttributes: variants, filters: cleanOptions(item.filters, 30) };
+    return { key, name, parentKey, active: item.active !== false, ...(item.aliases?.length ? { aliases: cleanOptions(item.aliases, 20) } : {}), attributes: localAttributes, variantAttributes: variants, filters: cleanOptions(item.filters, 30) };
   });
   if (result.some((item) => item.parentKey && !keys.has(item.parentKey))) bad('Every subcategory parent must exist in the same industry');
   result.forEach((item) => {
@@ -350,6 +350,8 @@ async function applyProductStructure(payload, existing = {}) {
   }
   const configuration = await readConfiguration(payload?.storeId || existing?.storeId);
   const { structure } = configuration;
+  if (payload.categoryDefinitionKey && payload.categoryDefinitionKey !== existing.categoryDefinitionKey
+    && !(structure.categoryDefinitions || []).some(item => item.key === payload.categoryDefinitionKey && item.active !== false)) bad('Choose an available product type.');
   const values = payload.attributeValues ?? existing.attributeValues ?? {};
   const source = values instanceof Map ? Object.fromEntries(values) : values;
   const oldValues = existing.attributeValues instanceof Map ? Object.fromEntries(existing.attributeValues) : (existing.attributeValues || {});
@@ -358,15 +360,16 @@ async function applyProductStructure(payload, existing = {}) {
   const activeStoreId = payload?.storeId || existing?.storeId;
   const selectedCategory = selectedCategoryId && mongoose.isValidObjectId(selectedCategoryId)
     ? await Category.findOne({ _id: selectedCategoryId, ...(activeStoreId && configuration.isDefaultStore
-      ? { $or: [{ storeId: activeStoreId }, { storeId: null }] } : { storeId: activeStoreId || null }) }).select('definitionKey name customAttributes').lean()
+      ? { $or: [{ storeId: activeStoreId }, { storeId: null }] } : { storeId: activeStoreId || null }) }).select('definitionKey name customAttributes parent').lean()
     : null;
+  const categoryHierarchy = await require('./categoryHierarchy').includeCategoryAncestors(selectedCategory ? [selectedCategory] : [], activeStoreId && configuration.isDefaultStore ? { $or: [{ storeId: activeStoreId }, { storeId: null }] } : { storeId: activeStoreId || null });
   const requestedSubcategory = String(payload.subCategory ?? existing.subCategory ?? '').trim().toLowerCase();
-  const requestedKey = text(selectedCategory?.definitionKey || payload.categoryDefinitionKey || existing.categoryDefinitionKey || selectedCategory?.name || requestedSubcategory, 50).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-  const categoryDefinition = configuredCategory(structure, selectedCategory ? [selectedCategory] : [], {
+  const requestedKey = text(payload.categoryDefinitionKey || existing.categoryDefinitionKey || selectedCategory?.definitionKey || selectedCategory?.name || requestedSubcategory, 50).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+  const categoryDefinition = configuredCategory(structure, categoryHierarchy, {
     ...existing, ...payload, category: selectedCategoryId, subCategory: requestedSubcategory,
   });
   const definitionKey = categoryDefinition?.key || requestedKey;
-  const definitions = configuredAttributes(structure, selectedCategory ? [selectedCategory] : [], {
+  const definitions = configuredAttributes(structure, categoryHierarchy, {
     ...existing, ...payload, category: selectedCategoryId, subCategory: requestedSubcategory,
   });
   const categoryChain = [];
@@ -458,4 +461,4 @@ function validateAttributeValue(definition, raw) {
   if (definition.validation?.maxLength && cleaned.length > definition.validation.maxLength) bad(`${definition.label} is too long`);
   return cleaned;
 }
-module.exports = { validateStructure, readConfiguration, updateConfiguration, publicStructure, applyProductStructure };
+module.exports = { validateStructure, readConfiguration, updateConfiguration, publicStructure, applyProductStructure, validateAttributeValue };
