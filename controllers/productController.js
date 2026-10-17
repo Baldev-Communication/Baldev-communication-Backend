@@ -1,5 +1,6 @@
 const { asyncHandler } = require('../middleware/validate');
 const { applyProductStructure, readConfiguration } = require('../services/masterConfigurationService');
+const { rentalModuleEnabled, effectiveCommerceMode } = require('../config/commerce');
 const Product = require('../models/Product');
 const InventoryTransaction = require('../models/InventoryTransaction');
 const Category = require('../models/Category');
@@ -82,7 +83,7 @@ function normalizeProductResponse(product, req) {
   const data = normalizeProductImages(isPrivateCatalog ? product : applyEffectivePricing(product), req);
   if (data.attributeValues instanceof Map) data.attributeValues = Object.fromEntries(data.attributeValues);
   if (!isPrivateCatalog) delete data.completeLookProductIds;
-  if (!isPrivateCatalog && req?.store?.catalogStructure?.commerce?.mode === 'RENTAL_ONLY') data.commerceMode = 'RENTAL_ONLY';
+  if (!isPrivateCatalog) data.commerceMode = effectiveCommerceMode(req?.store?.catalogStructure?.commerce?.mode === 'RENTAL_ONLY' ? 'RENTAL_ONLY' : data.commerceMode);
   return normalizeProductSizing(data, data.category?.name || '');
 }
 
@@ -107,6 +108,7 @@ exports.getProducts = asyncHandler(async (req, res) => {
   const publicVisibility = {
     $and: [
       { isActive: true, isArchived: { $ne: true } },
+      ...(rentalModuleEnabled() ? [] : [{ commerceMode: { $ne: 'RENTAL_ONLY' } }]),
       { $or: [{ publishAt: { $exists: false } }, { publishAt: null }, { publishAt: { $lte: new Date() } }] },
     ],
   };
@@ -306,6 +308,7 @@ async function buildPublicCatalogFacets(req, catalogConfiguration, configuredAtt
   const visibility = catalogQuery(req, {
     $and: [
       { isActive: true, isArchived: { $ne: true } },
+      ...(rentalModuleEnabled() ? [] : [{ commerceMode: { $ne: 'RENTAL_ONLY' } }]),
       { $or: [{ publishAt: { $exists: false } }, { publishAt: null }, { publishAt: { $lte: new Date() } }] },
     ],
   });
@@ -468,6 +471,7 @@ exports.getProductBySlug = asyncHandler(async (req, res) => {
   const scoped = catalogQuery(req, {
     $and: [
       { isActive: true, isArchived: { $ne: true } },
+      ...(rentalModuleEnabled() ? [] : [{ commerceMode: { $ne: 'RENTAL_ONLY' } }]),
       { $or: [{ publishAt: { $exists: false } }, { publishAt: null }, { publishAt: { $lte: new Date() } }] },
     ],
   });

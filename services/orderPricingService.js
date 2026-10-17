@@ -60,7 +60,7 @@ async function loadOrderItems(orderItems, { tenantFilter = {} } = {}) {
 
     const product = await Product.findOne(andFilter({ _id: productId }, tenantFilter));
     if (!product) throw new ApiError('NOT_FOUND', `${raw.name || 'A product'} is no longer available`);
-    if (product.commerceMode === 'RENTAL_ONLY') throw new ApiError('CHECKOUT_RESTRICTED', `${product.name} is available for rental bookings only`);
+    if (product.commerceMode === 'RENTAL_ONLY') throw new ApiError('CHECKOUT_RESTRICTED', `${product.name} is not available for sale`);
     if (!productAvailableForSale(product)) throw new ApiError('OUT_OF_STOCK', `${product.name} is not available for sale yet`);
 
     const variant = requireVariant(product, {
@@ -135,7 +135,7 @@ async function loadOrderItems(orderItems, { tenantFilter = {} } = {}) {
  * Builds the priced order draft used by COD checkout, Razorpay order
  * creation, payment verification and the checkout quote endpoint.
  */
-async function buildOrderDraft({ orderItems, couponCode, paymentMethod, settings, userId, shippingAddress, tenantFilter } = {}) {
+async function buildOrderDraft({ orderItems, couponCode, paymentMethod, settings, userId, shippingAddress, tenantFilter, deliveryMethod } = {}) {
   const storeSettings = settings || await getStoreSettings(tenantFilter || {});
   if (storeSettings.acceptingOrders === false) throw new ApiError('VALIDATION_ERROR', storeSettings.orderPauseMessage || 'The store is temporarily not accepting new orders.');
   const method = normalizeMethod(paymentMethod);
@@ -145,7 +145,7 @@ async function buildOrderDraft({ orderItems, couponCode, paymentMethod, settings
   let coupon = null;
   let couponDiscount = 0;
   const couponTenantFilter = tenantFilter || (items[0]?.storeId ? defaultStoreFilter(items[0].storeId) : {});
-  const shippingQuote = await require('./deliveryService').checkoutShipping({ items, settings: storeSettings, address: shippingAddress, paymentMethod: method, amount: sellingTotal });
+  const shippingQuote = await require('./deliveryService').checkoutShipping({ items, settings: storeSettings, address: shippingAddress, paymentMethod: method, amount: sellingTotal, deliveryMethod });
   const couponContext = {
     cartTotal: sellingTotal,
     paymentMethod: method,

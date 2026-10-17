@@ -139,8 +139,12 @@ function requireActiveStoreLicenseForWrites(req, _res, next) {
 }
 
 function assertStoreCanAcceptOrders(store, { rental = false } = {}) {
+  const { rentalModuleEnabled } = require('../config/commerce');
+  const rentalsEnabled = rentalModuleEnabled();
+  if (rental && !rentalsEnabled) throw new ApiError('CHECKOUT_RESTRICTED', 'This store supports product sales only.');
   if (!store) return;
-  if (!rental && (store.salesEnabled === false || store.catalogStructure?.commerce?.mode === 'RENTAL_ONLY')) {
+  const previousRentalOnly = store.catalogStructure?.commerce?.mode === 'RENTAL_ONLY';
+  if (!rental && ((store.salesEnabled === false && !(previousRentalOnly && !rentalsEnabled)) || (previousRentalOnly && rentalsEnabled))) {
     throw new ApiError('CHECKOUT_RESTRICTED', 'This store offers rental bookings rather than product sales.');
   }
   if (store.checkoutEnabled === false || store.archivedAt || store.status === 'SUSPENDED') {

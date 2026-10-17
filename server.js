@@ -105,7 +105,7 @@ async function startServer() {
       retryTraffic.unref(); cleanupTasks.push(() => clearInterval(retryTraffic));
     }
     cleanupTasks.push(require('./services/orderAlertService').startWorker());
-    cleanupTasks.push(require('./services/rentalWorker').startWorker());
+    if (require('./config/commerce').rentalModuleEnabled()) cleanupTasks.push(require('./services/rentalWorker').startWorker());
     cleanupTasks.push(require('./services/storeContentService').startContentReleaseWorker());
     cleanupTasks.push(require('./services/subscriptionLifecycleService').startSubscriptionLifecycleWorker());
     const paymentController = require('./controllers/paymentController');

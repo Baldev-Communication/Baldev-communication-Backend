@@ -1,12 +1,25 @@
-function configuredAttributes(structure = {}, categories = [], existing = {}) {
+function configuredCategory(structure = {}, categories = [], existing = {}) {
   existing = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
   const definitions = structure.categoryDefinitions || [];
-  const category = categories.find(item => String(item._id) === String(existing.category || ''));
+  const category = categories.find(item => String(item._id) === String(existing.category?._id || existing.category || ''));
   const normalize = value => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
   const subcategory = String(existing.subCategory || '').trim().toLowerCase();
   const child = subcategory && definitions.find(item => item.key === normalize(subcategory) || String(item.name || '').toLowerCase() === subcategory);
-  const selected = child || [existing.categoryDefinitionKey, category?.definitionKey, normalize(category?.name)]
+  const base = [category?.definitionKey, existing.categoryDefinitionKey, normalize(category?.name)]
     .map(key => definitions.find(item => item.key === key)).find(Boolean);
+  let cursor = child;
+  for (let depth = 0; cursor && depth < 12; depth++) {
+    if (!base || cursor.key === base.key) return child;
+    cursor = definitions.find(item => item.key === cursor.parentKey);
+  }
+  return base;
+}
+
+function configuredAttributes(structure = {}, categories = [], existing = {}) {
+  existing = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
+  const definitions = structure.categoryDefinitions || [];
+  const category = categories.find(item => String(item._id) === String(existing.category?._id || existing.category || ''));
+  const selected = configuredCategory(structure, categories, existing);
   const merged = new Map((structure.attributes || []).map(item => [item.key, item]));
   const chain = [];
   let cursor = selected;
@@ -18,7 +31,10 @@ function configuredAttributes(structure = {}, categories = [], existing = {}) {
   for (const layer of chain) for (const item of layer.attributes || []) {
     if (item && typeof item === 'object' && item.key) merged.set(item.key, { ...merged.get(item.key), ...item });
   }
+  for (const item of category?.customAttributes || []) {
+    if (item && /^custom_[a-z][a-z0-9_]{0,32}$/.test(item.key)) merged.set(item.key, item);
+  }
   return [...merged.values()].filter(item => item.active !== false);
 }
 
-module.exports = { configuredAttributes };
+module.exports = { configuredAttributes, configuredCategory };

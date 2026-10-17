@@ -142,9 +142,10 @@ test('one upload creates independent four, three and two photo drafts with mobil
   body.append('groupMode', 'grouped');
   body.append('photoGroups', JSON.stringify([1, 1, 1, 1, 2, 2, 2, 3, 3]));
   body.append('groupDetails', JSON.stringify({
-    1: { category: String(category._id), model: 'Apple iPhone 17', ram: '8', storage: '256' },
-    2: { category: String(category._id), model: 'Galaxy A15', ram: '8', storage: '128' },
-    3: { category: String(category._id), model: 'Pixel 10', ram: '8', storage: '256' },
+    1: { category: String(category._id), model: 'Apple iPhone 17', ram: '8', storage: '256', sellingPrice: '39999', originalPrice: '49999', stock: '2', costPrice: '30000', gstRate: '18', condition: 'Used', warranty: '3 months seller warranty', brand: 'Apple',
+      sku: 'APPLE-MANUAL-01', supplierSku: 'SUP-1', barcode: '1234567890', countryOfOrigin: 'India', shippingWeightKg: '0.5', packageDimensions: { lengthCm: '20', widthCm: '10', heightCm: '5' }, attributeValues: { dimensions: '150 x 75 x 8 mm', box_contents: 'Phone only' } },
+    2: { category: String(category._id), model: 'Galaxy A15', ram: '8', storage: '128', sellingPrice: '14999', originalPrice: '19999', stock: '0', condition: 'New' },
+    3: { category: String(category._id), model: 'Pixel 10', ram: '8', storage: '256', sellingPrice: '45999', originalPrice: '59999', stock: '1', condition: 'Refurbished' },
   }));
   const response = await fetch(`${getBaseUrl()}/api/admin/product-drafts/bulk-upload`, { method: 'POST', headers: { Authorization: `Bearer ${admin.token}` }, body });
   const result = await response.json();
@@ -153,6 +154,14 @@ test('one upload creates independent four, three and two photo drafts with mobil
   assert.deepEqual(drafts.map(draft => draft.images.length), [4, 3, 2]);
   assert.deepEqual(drafts.map(draft => draft.name), ['Apple iPhone 17', 'Galaxy A15', 'Pixel 10']);
   assert.equal(drafts[0].attributeValues.storage, '256');
+  assert.deepEqual(drafts.map(draft => draft.sellingPrice), [39999, 14999, 45999]);
+  assert.deepEqual(drafts.map(draft => draft.stock), [2, 0, 1]);
+  assert.deepEqual(drafts.map(draft => draft.attributeValues.condition), ['Used', 'New', 'Refurbished']);
+  assert.equal(drafts[0].sku, 'APPLE-MANUAL-01'); assert.equal(drafts[0].warranty, '3 months seller warranty');
+  const saved = await request(`/api/admin/product-drafts/${drafts[0]._id}`, { token: admin.token });
+  assert.equal(saved.data.data.sellingPrice, 39999); assert.equal(saved.data.data.supplierSku, 'SUP-1');
+  assert.equal(saved.data.data.shippingWeightKg, 0.5); assert.deepEqual(saved.data.data.packageDimensions, { lengthCm: 20, widthCm: 10, heightCm: 5 });
+  assert.equal(saved.data.data.attributeValues.dimensions, '150 x 75 x 8 mm'); assert.equal(saved.data.data.attributeValues.box_contents, 'Phone only');
   assert.equal(drafts[0].images[0].primary, true);
   assert.equal(new Set(drafts.flatMap(draft => draft.images.map(photo => photo.url))).size, 9);
   t.after(async () => {

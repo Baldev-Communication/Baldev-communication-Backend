@@ -137,6 +137,7 @@ exports.quoteOrder = asyncHandler(async (req, res) => {
     settings,
     userId: req.user?._id,
     shippingAddress: req.body.shippingAddress,
+    deliveryMethod: req.body.deliveryMethod,
     tenantFilter: req.tenantFilter,
   });
 
@@ -179,6 +180,7 @@ exports.createOrder = asyncHandler(async (req, res) => {
     userId: req.user?._id,
     shippingAddress,
     tenantFilter: req.tenantFilter,
+    deliveryMethod: req.body?.deliveryMethod,
   });
 
   const codDecision = await evaluateCodVerification({
@@ -448,8 +450,13 @@ exports.updateShippingAddress = asyncHandler(async (req, res) => {
 
   const settings = await getStoreSettings(req.tenantFilter || {});
   const merchandiseAmount = Math.max(0, Number(order.finalAmount || 0) - Number(order.deliveryCharge || 0) - Number(order.codCharge || 0) - Number(order.platformFee || 0) + Number(order.prepaidDiscount || 0));
-  const quote = await require('../services/deliveryService').checkoutShipping({ items: order.orderItems, settings, address, paymentMethod: order.paymentMethod, amount: merchandiseAmount });
-  if (Math.abs(Number(quote.deliveryCharge || 0) - Number(order.deliveryCharge || 0)) > 0.01) throw new ApiError('SHIPPING_QUOTE_CHANGED', 'This PIN code changes the agreed delivery charge. Cancel and place a corrected order instead of changing the customer total.', { statusCode: 409 });
+  const localContract = order.shippingQuote?.deliveryMethod === 'LOCAL' ? order.shippingQuote : null;
+  const quote = localContract ? {
+    ...localContract,
+    ...require('../services/localDeliveryService').localDeliveryQuote({ settings: { localDeliveryOrigin: localContract.origin, localDeliveryRadiusKm: localContract.radiusKm, localDeliveryFee: localContract.deliveryCharge, localDeliveryEstimate: localContract.deliveryEstimate }, address, amount: merchandiseAmount }),
+    pricingSource: localContract.pricingSource,
+  } : await require('../services/deliveryService').checkoutShipping({ items: order.orderItems, settings: { ...settings, standardDeliveryEnabled: true }, address, paymentMethod: order.paymentMethod, amount: merchandiseAmount, deliveryMethod: 'STANDARD' });
+  if (!localContract && Math.abs(Number(quote.deliveryCharge || 0) - Number(order.deliveryCharge || 0)) > 0.01) throw new ApiError('SHIPPING_QUOTE_CHANGED', 'This PIN code changes the agreed delivery charge. Cancel and place a corrected order instead of changing the customer total.', { statusCode: 409 });
   const before = order.shippingAddress;
   const updated = await Order.findOneAndUpdate(andFilter({ _id: order._id, ...revisionFilter(expectedRevision) }, req.tenantFilter), {
     $set: { shippingAddress: address, shippingQuote: quote },

@@ -63,6 +63,7 @@ function pickupSlot(date, time, closeTime, now = new Date()) {
   return { date, time, closeTime, at };
 }
 function normalizeShippingSettings(updates, current) {
+  require('./localDeliveryService').normalizeLocalDeliverySettings(updates, current);
   const next = { ...DEFAULTS, ...current, ...updates };
   if (!['manual', 'bluedart', 'shiprocket', 'delhivery', 'xpressbees'].includes(next.shippingProvider)) throw error('Choose a supported delivery provider.');
   // Older stores had only manual courier. An omitted/empty preference keeps that
@@ -104,11 +105,11 @@ function normalizeShippingSettings(updates, current) {
       return result;
     });
   }
-  if (next.shippingProvider !== 'manual') pickupAddress(updates.shippingPickup || next.shippingPickup);
+  if (next.standardDeliveryEnabled !== false && next.shippingProvider !== 'manual') pickupAddress(updates.shippingPickup || next.shippingPickup);
   return updates;
 }
 function assertQuotedTotal(draft, expectedTotal) {
-  if (draft.shippingQuote?.provider === 'manual' && expectedTotal === undefined) return;
+  if (draft.shippingQuote?.provider === 'manual' && draft.shippingQuote?.deliveryMethod !== 'LOCAL' && expectedTotal === undefined) return;
   if (typeof expectedTotal !== 'number' || !Number.isFinite(expectedTotal) || Math.round(expectedTotal * 100) !== Math.round(draft.totals.finalAmount * 100)) throw new ApiError('SHIPPING_QUOTE_CHANGED', 'Your order total has changed. Review the updated delivery charge and total before placing the order.', { statusCode: 409 });
 }
 module.exports = { DEFAULTS, pincode, positive, packageForItems, deliveryPrice, pickupAddress, pickupSlot, normalizeShippingSettings, assertQuotedTotal };

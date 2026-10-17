@@ -55,7 +55,7 @@ exports.fill = asyncHandler(async (req, res) => {
   res.on('close', cancel);
   try {
     const [categories, configuration] = await Promise.all([
-      Category.find(andFilter({ isActive: { $ne: false } }, req.tenantFilter)).select('_id name definitionKey').limit(100).lean(), readConfiguration(req.store?._id),
+      Category.find(andFilter({ isActive: { $ne: false }, isArchived: { $ne: true } }, req.tenantFilter)).select('_id name definitionKey customAttributes').limit(100).lean(), readConfiguration(req.store?._id),
     ]);
     const attributes = configuredAttributes(configuration.structure, categories, req.body?.existing);
     const caption = sourceText(req.body || {}, categories, attributes);
@@ -106,7 +106,7 @@ exports.fill = asyncHandler(async (req, res) => {
     });
     let webSources = []; let searchSuggestions = '';
     let specificationLookup = { status: req.body?.webSearch === false ? 'disabled' : enabled(provider) ? 'missing_model' : 'unavailable', fieldCount: 0,
-      message: req.body?.webSearch === false ? 'Internet specification lookup is off.' : enabled(provider) ? 'Enter the exact device or accessory model to fetch specifications.' : 'Configure an AI provider to fetch internet specifications.' };
+      message: req.body?.webSearch === false ? 'Internet specification lookup is off.' : enabled(provider) ? 'Choose the product category and enter the exact brand and model to fetch specifications.' : 'Configure an AI provider to fetch internet specifications.' };
     const providerUnavailable = ['AI_QUOTA_EXCEEDED', 'AI_ACCESS_DENIED', 'AI_KEY_MISSING'].includes(suggestion.contextErrorCode);
     if (req.body?.webSearch !== false && providerUnavailable) specificationLookup = { status: 'failed', fieldCount: 0, code: suggestion.contextErrorCode, message: suggestion.contextError };
     if (enabled(provider) && req.body?.webSearch !== false && !providerUnavailable) {

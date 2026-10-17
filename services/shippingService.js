@@ -36,6 +36,7 @@ function manualShipmentValues(order, shipment, input = {}, settings = {}) {
     ? (shipment ? previousMode : order.shippingQuote?.fulfillmentMode || settings.manualDeliveryMode || 'COURIER')
     : input.fulfillmentMode;
   if (!['COURIER', 'SELF'].includes(fulfillmentMode)) throw new ApiError('VALIDATION_ERROR', 'Choose manual courier or self delivery.');
+  if (order.shippingQuote?.deliveryMethod === 'LOCAL' && fulfillmentMode !== 'SELF') throw new ApiError('SHIPPING_VALIDATION', 'This order was placed for local self delivery. Keep its saved delivery method.');
   const text = (key, max) => input[key] === undefined ? String(shipment?.[key] || '') : deliveryText(input[key], key, max);
   const courierName = fulfillmentMode === 'SELF' ? '' : text('courierName', 80);
   if (input.awb && input.trackingNumber && String(input.awb).trim() !== String(input.trackingNumber).trim()) throw new ApiError('VALIDATION_ERROR', 'AWB and tracking number must refer to the same parcel.');

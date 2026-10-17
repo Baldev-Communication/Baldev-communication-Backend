@@ -15,6 +15,7 @@ const addressSchema = new mongoose.Schema({
   landmark: String,
   addressType: { type: String, enum: ['Home', 'Work', 'Other'], default: 'Home' },
   isDefault: { type: Boolean, default: false },
+  location: { type: new mongoose.Schema({ latitude: { type: Number, min: -90, max: 90 }, longitude: { type: Number, min: -180, max: 180 } }, { _id: false }), default: undefined },
 });
 
 const userSchema = new mongoose.Schema({

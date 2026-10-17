@@ -10,6 +10,7 @@ const categorySchema = new mongoose.Schema({
   parentDefinitionKey: { type: String, trim: true, maxlength: 50, default: '' },
   level: { type: Number, default: 0, min: 0, max: 5 },
   attributeOverrides: { type: [mongoose.Schema.Types.Mixed], default: [] },
+  customAttributes: { type: [mongoose.Schema.Types.Mixed], default: [] },
   variantAttributes: { type: [String], default: [] },
   configuredFilters: { type: [String], default: [] },
   image: { type: String, trim: true, maxlength: 1000 },

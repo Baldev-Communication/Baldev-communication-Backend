@@ -8,6 +8,23 @@ router.use(protect);
 
 router.get('/', (req, res) => res.json(req.user.addresses || []));
 
+router.patch('/:addressId/location', asyncHandler(async (req, res) => {
+  require('../utils/validators').requireObjectId(req.params.addressId, 'address id');
+  const current = req.user.addresses.id(req.params.addressId);
+  if (!current) return res.status(404).json({ message: 'Address not found' });
+  const point = require('../services/localDeliveryService').locationPoint(req.body.location);
+  if (!point) throw new (require('../utils/apiError').ApiError)('VALIDATION_ERROR', 'Choose a valid delivery location on the map.');
+  const expected = req.body.expectedAddress || {};
+  const fields = ['houseNo', 'area', 'city', 'state', 'pincode'];
+  if (fields.some(key => typeof expected[key] !== 'string' || expected[key].trim() !== String(current[key] || (key === 'houseNo' ? current.houseNumber : '') || '').trim())) {
+    throw new (require('../utils/apiError').ApiError)('DUPLICATE_REQUEST', 'This address changed. Reload it before confirming a delivery pin.');
+  }
+  const match = { _id: current._id, ...Object.fromEntries([...fields, 'houseNumber'].map(key => [key, current[key] === undefined ? { $exists: false } : current[key]])) };
+  const saved = await User.findOneAndUpdate({ _id: req.user._id, addresses: { $elemMatch: match } }, { $set: { 'addresses.$.location': point } }, { new: true, runValidators: true });
+  if (!saved) throw new (require('../utils/apiError').ApiError)('DUPLICATE_REQUEST', 'This address changed. Reload it before confirming a delivery pin.');
+  res.json(saved.addresses);
+}));
+
 router.post('/', asyncHandler(async (req, res) => {
   const error = validateAddress(req.body);
   if (error) return res.status(400).json({ message: error });
@@ -22,6 +39,7 @@ router.put('/:addressId', asyncHandler(async (req, res) => {
   if (error) return res.status(400).json({ message: error });
   const address = req.user.addresses.id(req.params.addressId);
   if (!address) return res.status(404).json({ message: 'Address not found' });
+  if (req.body.location === undefined && ['houseNo', 'area', 'city', 'state', 'pincode'].some(key => String(req.body[key] || (key === 'houseNo' ? req.body.houseNumber : '') || '').trim() !== String(address[key] || (key === 'houseNo' ? address.houseNumber : '') || '').trim())) address.location = undefined;
   if (req.body.isDefault) req.user.addresses.forEach((item) => { item.isDefault = false; });
   Object.assign(address, normalizeAddress(req.body, req.body.isDefault));
   if (!req.user.addresses.some((item) => item.isDefault)) req.user.addresses[0].isDefault = true;
@@ -49,6 +67,8 @@ router.patch('/:addressId/default', asyncHandler(async (req, res) => {
 function normalizeAddress(data = {}, isDefault = false) {
   const text = (value) => typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
   const mobile = normalizeIndianMobile(data.mobile || data.phone);
+  const point = data.location === undefined || data.location === null ? null : require('../services/localDeliveryService').locationPoint(data.location);
+  if (data.location !== undefined && data.location !== null && !point) throw new (require('../utils/apiError').ApiError)('VALIDATION_ERROR', 'Choose a valid delivery location on the map.');
   return {
     fullName: text(data.fullName),
     mobile,
@@ -63,6 +83,7 @@ function normalizeAddress(data = {}, isDefault = false) {
     landmark: text(data.landmark),
     addressType: text(data.addressType) || 'Home',
     isDefault,
+    ...(data.location !== undefined ? { location: point || undefined } : {}),
   };
 }
 

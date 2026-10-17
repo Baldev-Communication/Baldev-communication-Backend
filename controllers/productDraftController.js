@@ -24,9 +24,7 @@ const { supportsTransactions, runInTransaction } = require('../utils/transaction
 const { runUploadRequest } = require('../services/uploadRetryService');
 const { storeFiles } = require('../services/mediaUploadService');
 const { compressDraftUploads } = require('../services/draftImageCompression');
-const { draftUploadPlan } = require('../services/draftUploadGroups');
-const { configuredAttributes } = require('../services/productAttributes');
-const { configuredAttributeValue } = require('../services/configuredAttributeValue');
+const { draftUploadPlan, draftUploadSeed } = require('../services/draftUploadGroups');
 const { readConfiguration } = require('../services/masterConfigurationService');
 const { createRecordOnce } = require('../services/recordCreationService');
 
@@ -62,7 +60,7 @@ exports.bulkUploadMiddleware = multer({
     if (!allowedTypes.includes(file.mimetype)) return cb(new Error('Only jpg, jpeg, png and webp images are allowed'));
     cb(null, true);
   },
-  limits: { fileSize: 20 * 1024 * 1024, files: 30 },
+  limits: { fileSize: 20 * 1024 * 1024, files: 30, fieldSize: 4 * 1024 * 1024 },
 });
 
 exports.bulkUpload = async (req, res, next) => {
@@ -77,28 +75,17 @@ exports.bulkUpload = async (req, res, next) => {
     const result = await runUploadRequest(req, async context => {
       const plan = draftUploadPlan(context.fields || req.body, context.resume ? context.storedFiles.length : req.files.length);
       const categoryIds = [...new Set(plan.groups.map(group => group.details.category).filter(Boolean))];
-      const categories = categoryIds.length ? await Category.find(draftQuery(req, { _id: { $in: categoryIds }, isActive: { $ne: false }, isArchived: { $ne: true } })).select('_id name definitionKey').lean() : [];
+      const categories = categoryIds.length ? await Category.find(draftQuery(req, { _id: { $in: categoryIds }, isActive: { $ne: false }, isArchived: { $ne: true } })).select('_id name definitionKey customAttributes').lean() : [];
       if (categories.length !== categoryIds.length) throw new ApiError('VALIDATION_ERROR', 'Choose an active category for each product group.', { statusCode: 400 });
-      const structure = plan.groups.some(group => group.details.model && group.details.category) ? (await readConfiguration(req.store?._id)).structure : null;
+      const structure = (await readConfiguration(req.store?._id)).structure;
       const groupSeeds = plan.groups.map((group, index) => {
         const category = categories.find(item => String(item._id) === group.details.category);
-        const definitions = structure && category ? configuredAttributes(structure, categories, { category: group.details.category }) : [];
-        const attributeValues = {};
-        for (const key of ['model', 'ram', 'storage']) {
-          const value = group.details[key];
-          if (!value) continue;
-          const definition = definitions.find(item => item.key === key);
-          if (!definition) continue;
-          const normalized = configuredAttributeValue(definition, value);
-          if (!normalized) throw new ApiError('VALIDATION_ERROR', `Product ${index + 1} has an unsupported ${definition.label}. Choose a configured value.`, { statusCode: 400 });
-          attributeValues[key] = normalized;
-        }
-        return { category, attributeValues };
+        return { category, payload: draftUploadSeed(group.details, { structure, categories, productNumber: index + 1 }) };
       });
       const uploaded = context.resume ? context.storedFiles : await storeFiles(req, context, { folder: 'products' });
       const payloads = plan.groups.map((group, index) => {
         const files = group.indexes.map(fileIndex => uploaded[fileIndex]);
-        const { category, attributeValues } = groupSeeds[index];
+        const { category, payload } = groupSeeds[index];
         return withDraftStore(req, {
         ...(context.managed ? { _id: new mongoose.Types.ObjectId(require('crypto').createHash('sha256').update(`${context.id}:draft:${index}`).digest('hex').slice(0, 24)), uploadOperationId: context.id } : {}),
         name: group.details.model || '',
@@ -108,7 +95,7 @@ exports.bulkUpload = async (req, res, next) => {
         images: files.map((file, fileIndex) => ({ url: file.url, publicId: file.publicId, primary: fileIndex === 0 })),
         videos: [],
         category: category?._id,
-        attributeValues,
+        attributeValues: {},
         subCategory: '',
         price: 0,
         originalPrice: 0,
@@ -125,6 +112,7 @@ exports.bulkUpload = async (req, res, next) => {
         tags: [],
         description: '',
         highlights: [],
+        ...payload,
         status: 'draft',
         sourceType: 'manual',
         createdBy: req.user?._id,

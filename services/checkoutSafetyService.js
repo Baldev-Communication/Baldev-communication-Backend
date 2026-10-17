@@ -32,12 +32,14 @@ function checkoutFingerprint(body = {}, paymentMethod) {
   const address = body.shippingAddress || {};
   const value = canonical({
     paymentMethod: String(paymentMethod || body.paymentMethod || '').toUpperCase(),
+    ...(body.deliveryMethod !== undefined ? { deliveryMethod: body.deliveryMethod } : {}),
     items,
     couponCode: String(body.coupon?.code || body.couponCode || '').trim().toUpperCase(),
     address: {
       fullName: String(address.fullName || '').trim(), mobile: String(address.mobile || address.phone || '').replace(/\D/g, ''),
       pincode: String(address.pincode || '').replace(/\D/g, ''), state: String(address.state || '').trim(), city: String(address.city || '').trim(),
       houseNo: String(address.houseNo || address.houseNumber || '').trim(), area: String(address.area || '').trim(), landmark: String(address.landmark || '').trim(),
+      ...(address.location !== undefined ? { location: address.location } : {}),
     },
   });
   return crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');

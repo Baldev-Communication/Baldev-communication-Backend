@@ -4,6 +4,9 @@ const Store = require('../models/Store');
 const Category = require('../models/Category');
 const mongoose = require('mongoose');
 const { ATTRIBUTE_TYPES, DEFAULT_STRUCTURE, INDUSTRY_IDS, getIndustryPreset } = require('../config/industryPresets');
+const { expandCatalog } = require('../config/extendedCatalog');
+const { rentalModuleEnabled, effectiveCommerceMode, salesStructure } = require('../config/commerce');
+const { configuredAttributes, configuredCategory } = require('./productAttributes');
 const { assertMasterOwner } = require('../config/masterOwner');
 const { ApiError } = require('../utils/apiError');
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -257,7 +260,7 @@ function validateStructure(input) {
     industry,
     version: Math.max(2, safeInteger(input.version, 2, 1, 100000)),
     active: input.active !== false,
-    commerce: { mode: commerce.mode, rentalModuleVersion: 1, stockMode: 'SEPARATE_RENTAL_ASSETS' },
+    commerce: { mode: effectiveCommerceMode(commerce.mode), rentalModuleVersion: 1, stockMode: 'SEPARATE_RENTAL_ASSETS' },
     attributes,
     features: {
       sizing: input.features.sizing, specifications: input.features.specifications,
@@ -284,19 +287,21 @@ function validateStructure(input) {
 }
 async function readConfiguration(storeId) {
   if (storeId) {
-    const store = await Store.findById(storeId).select('industry catalogStructure industryLocked industryRevision').lean();
+    const store = await Store.findById(storeId).select('industry catalogStructure industryLocked industryRevision isDefault').lean();
     if (store) {
       const base = store.catalogStructure || { ...clone(getIndustryPreset(store.industry)), clientPermissions: { content: true, payments: true } };
       return {
         _id: `store:${storeId}`,
-        structure: validateStructure(base),
+        isDefaultStore: store.isDefault === true,
+        structure: validateStructure(expandCatalog(base)),
         revision: Number(store.industryRevision || 0),
         locked: store.industryLocked !== false,
         history: [],
       };
     }
   }
-  return await Configuration.findById('store').lean() || { _id: 'store', structure: clone(DEFAULT_STRUCTURE), revision: 0, locked: true, history: [] };
+  const configuration = await Configuration.findById('store').lean() || { _id: 'store', structure: clone(DEFAULT_STRUCTURE), revision: 0, locked: true, history: [] };
+  return { ...configuration, structure: salesStructure(expandCatalog(configuration.structure)) };
 }
 async function ensureConfiguration() {
   return Configuration.findOneAndUpdate({ _id: 'store' }, { $setOnInsert: { structure: clone(DEFAULT_STRUCTURE), locked: true, revision: 0 } }, { upsert: true, new: true });
@@ -336,9 +341,13 @@ async function updateConfiguration(user, { revision, structure, locked, note = '
 }
 function publicStructure(config) {
   const { clientPermissions: _private, ...structure } = config.structure;
-  return { ...structure, revision: config.revision };
+  return { ...salesStructure(structure), revision: config.revision };
 }
 async function applyProductStructure(payload, existing = {}) {
+  if (!rentalModuleEnabled()) {
+    if (payload.commerceMode && payload.commerceMode !== 'SALE_ONLY') bad('Only product sales are available for this store.');
+    payload = { ...payload, commerceMode: 'SALE_ONLY' };
+  }
   const configuration = await readConfiguration(payload?.storeId || existing?.storeId);
   const { structure } = configuration;
   const values = payload.attributeValues ?? existing.attributeValues ?? {};
@@ -348,29 +357,23 @@ async function applyProductStructure(payload, existing = {}) {
   const selectedCategoryId = payload.category || existing.category;
   const activeStoreId = payload?.storeId || existing?.storeId;
   const selectedCategory = selectedCategoryId && mongoose.isValidObjectId(selectedCategoryId)
-    ? await Category.findOne({ _id: selectedCategoryId, ...(activeStoreId ? { storeId: activeStoreId } : {}) }).select('definitionKey name').lean()
+    ? await Category.findOne({ _id: selectedCategoryId, ...(activeStoreId && configuration.isDefaultStore
+      ? { $or: [{ storeId: activeStoreId }, { storeId: null }] } : { storeId: activeStoreId || null }) }).select('definitionKey name customAttributes').lean()
     : null;
   const requestedSubcategory = String(payload.subCategory ?? existing.subCategory ?? '').trim().toLowerCase();
-  const requestedKey = text(payload.categoryDefinitionKey || existing.categoryDefinitionKey || selectedCategory?.definitionKey || selectedCategory?.name || requestedSubcategory, 50).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
-  const categoryDefinition = (structure.categoryDefinitions || []).find((item) => requestedSubcategory && (
-    item.key === requestedSubcategory.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')
-    || item.name.toLowerCase() === requestedSubcategory
-  )) || (structure.categoryDefinitions || []).find((item) => item.key === requestedKey);
+  const requestedKey = text(selectedCategory?.definitionKey || payload.categoryDefinitionKey || existing.categoryDefinitionKey || selectedCategory?.name || requestedSubcategory, 50).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+  const categoryDefinition = configuredCategory(structure, selectedCategory ? [selectedCategory] : [], {
+    ...existing, ...payload, category: selectedCategoryId, subCategory: requestedSubcategory,
+  });
   const definitionKey = categoryDefinition?.key || requestedKey;
-  const definitions = [...structure.attributes];
+  const definitions = configuredAttributes(structure, selectedCategory ? [selectedCategory] : [], {
+    ...existing, ...payload, category: selectedCategoryId, subCategory: requestedSubcategory,
+  });
   const categoryChain = [];
   let cursor = categoryDefinition;
   while (cursor && categoryChain.length < 12) {
     categoryChain.unshift(cursor);
     cursor = cursor.parentKey ? (structure.categoryDefinitions || []).find((item) => item.key === cursor.parentKey) : null;
-  }
-  for (const layer of categoryChain) {
-    for (const item of layer.attributes || []) {
-      if (typeof item !== 'object' || !item.key) continue;
-      const index = definitions.findIndex((definition) => definition.key === item.key);
-      if (index >= 0) definitions[index] = { ...definitions[index], ...item };
-      else definitions.push(item);
-    }
   }
   const keys = new Set(definitions.map((item) => item.key));
   const protectedLegacyKeys = new Set(Object.keys(oldValues).filter((key) => !keys.has(key)));

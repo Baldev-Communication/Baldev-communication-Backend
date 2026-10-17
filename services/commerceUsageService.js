@@ -3,6 +3,7 @@ const { Booking } = require('../models/Rental');
 const Store = require('../models/Store');
 const { storeLimit } = require('../config/storePlans');
 const { ApiError } = require('../utils/apiError');
+const { rentalModuleEnabled } = require('../config/commerce');
 
 function monthStart(now = new Date()) {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -22,11 +23,11 @@ async function monthlyUsage({ store, allStores = false, session, now = new Date(
     ? { $or: [{ storeId: store._id }, { storeId: null }, { storeId: { $exists: false } }] }
     : { storeId: store._id };
   const sales = Order.countDocuments({ $and: [scope, { createdAt: { $gte: monthStart(now) }, orderStatus: { $ne: 'Cancelled' } }] });
-  const rentals = Booking.countDocuments({ $and: [allStores || !store?._id ? {} : { storeId: store._id }, rentalMonthFilter(now)] });
-  if (session) { sales.session(session); rentals.session(session); }
+  const rentals = rentalModuleEnabled() ? Booking.countDocuments({ $and: [allStores || !store?._id ? {} : { storeId: store._id }, rentalMonthFilter(now)] }) : null;
+  if (session) { sales.session(session); if (rentals) rentals.session(session); }
   // Do not run parallel operations on the same MongoDB transaction session.
   const saleOrdersPerMonth = await sales;
-  const rentalBookingsPerMonth = await rentals;
+  const rentalBookingsPerMonth = rentals ? await rentals : 0;
   return { saleOrdersPerMonth, rentalBookingsPerMonth, ordersPerMonth: saleOrdersPerMonth + rentalBookingsPerMonth };
 }
 function finiteLimit(value) {
@@ -48,11 +49,11 @@ async function assertMonthlyCapacity(store, { session, platform, lock = false } 
   }
   const storeMaximum = finiteLimit(storeLimit(store, 'ordersPerMonth'));
   const usage = await monthlyUsage({ store, session });
-  if (usage.ordersPerMonth >= storeMaximum) throw new ApiError('PLAN_LIMIT_REACHED', `This store has reached its ${storeMaximum.toLocaleString('en-IN')} sale orders and confirmed rentals per month limit.`);
+  if (usage.ordersPerMonth >= storeMaximum) throw new ApiError('PLAN_LIMIT_REACHED', `This store has reached its ${storeMaximum.toLocaleString('en-IN')} orders per month limit.`);
   const installationMaximum = platform?.managed ? finiteLimit(platform.limits?.ordersPerMonth) : Infinity;
   if (Number.isFinite(installationMaximum)) {
     const installationUsage = await monthlyUsage({ allStores: true, session });
-    if (installationUsage.ordersPerMonth >= installationMaximum) throw new ApiError('PLAN_LIMIT_REACHED', `This installation allows ${installationMaximum.toLocaleString('en-IN')} sale orders and confirmed rentals per month.`);
+    if (installationUsage.ordersPerMonth >= installationMaximum) throw new ApiError('PLAN_LIMIT_REACHED', `This installation allows ${installationMaximum.toLocaleString('en-IN')} orders per month.`);
   }
 }
 module.exports = { monthStart, rentalMonthFilter, monthlyUsage, assertMonthlyCapacity };

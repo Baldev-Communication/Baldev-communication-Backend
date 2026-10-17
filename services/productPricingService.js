@@ -16,7 +16,7 @@ function scheduledSaleActive(product = {}, now = new Date()) {
 }
 
 function productAvailableForSale(product = {}, now = new Date()) {
-  if (!product || product.isActive === false || product.isArchived) return false;
+  if (!product || product.isActive === false || product.isArchived || product.commerceMode === 'RENTAL_ONLY') return false;
   if (!product.publishAt) return true;
   const publishAt = new Date(product.publishAt);
   return !Number.isNaN(publishAt.getTime()) && publishAt <= now;

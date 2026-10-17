@@ -11,9 +11,10 @@ const { ApiError } = require('../utils/apiError');
 const { logAudit } = require('../services/auditService');
 const { auditSnapshot } = require('../utils/auditData');
 const { isMasterOwner } = require('../config/masterOwner');
+const { cleanCategorySpecifications } = require('../services/categorySpecifications');
 
-const CATEGORY_AUDIT_FIELDS = ['name', 'slug', 'parent', 'level', 'definitionKey', 'description', 'image', 'socialImage', 'metaTitle', 'metaDescription', 'displayOrder', 'isActive', 'isArchived', 'archivedAt'];
-const EDITABLE_FIELDS = ['name', 'slug', 'parent', 'definitionKey', 'description', 'image', 'socialImage', 'metaTitle', 'metaDescription', 'displayOrder', 'isActive'];
+const CATEGORY_AUDIT_FIELDS = ['name', 'slug', 'parent', 'level', 'definitionKey', 'customAttributes', 'description', 'image', 'socialImage', 'metaTitle', 'metaDescription', 'displayOrder', 'isActive', 'isArchived', 'archivedAt'];
+const EDITABLE_FIELDS = ['name', 'slug', 'parent', 'definitionKey', 'customAttributes', 'description', 'image', 'socialImage', 'metaTitle', 'metaDescription', 'displayOrder', 'isActive'];
 
 function withStoreId(payload, req) {
   const next = { ...payload };
@@ -230,6 +231,7 @@ exports.createCategory = asyncHandler(async (req, res) => {
     name,
     slug,
     definitionKey: definitionKey(source.definitionKey),
+    customAttributes: cleanCategorySpecifications(source.customAttributes),
     description: textValue(source.description, 1200, 'Description'),
     image: imageUrl(source.image, 'Category image'),
     socialImage: imageUrl(source.socialImage, 'Social image'),
@@ -250,6 +252,18 @@ exports.updateCategory = asyncHandler(async (req, res) => {
   if (!category) return res.status(404).json({ message: 'Category not found' });
   const source = requestedPayload(req.body);
   const removeImage = req.body.removeImage === true;
+  const customAttributes = source.customAttributes === undefined ? undefined : cleanCategorySpecifications(source.customAttributes);
+  if (customAttributes) {
+    for (const previous of category.customAttributes || []) {
+      const next = customAttributes.find(item => item.key === previous.key);
+      const incompatible = !next || next.type !== previous.type || next.unit !== previous.unit
+        || (previous.options || []).some(option => !next.options.includes(option));
+      if (!incompatible) continue;
+      const query = scoped(req, { category: category._id, [`attributeValues.${previous.key}`]: { $exists: true, $nin: ['', null] } });
+      const [product, draft] = await Promise.all([Product.exists(query), ProductDraft.exists(query)]);
+      if (product || draft) throw new ApiError('VALIDATION_ERROR', `${previous.label} is used by products or drafts. Keep its field type, unit and existing choices, or clear those values first.`);
+    }
+  }
   const removeSocialImage = req.body.removeSocialImage === true;
   const before = auditSnapshot(category, CATEGORY_AUDIT_FIELDS);
   const name = source.name === undefined ? category.name : textValue(source.name, 80, 'Category name', { required: true });
@@ -274,6 +288,7 @@ exports.updateCategory = asyncHandler(async (req, res) => {
     name,
     slug,
     ...(source.definitionKey !== undefined ? { definitionKey: definitionKey(source.definitionKey) } : {}),
+    ...(customAttributes ? { customAttributes } : {}),
     ...(source.description !== undefined ? { description: textValue(source.description, 1200, 'Description') } : {}),
     ...(removeImage ? { image: '' } : nextImage ? { image: nextImage } : {}),
     ...(removeSocialImage ? { socialImage: '' } : nextSocialImage ? { socialImage: nextSocialImage } : {}),

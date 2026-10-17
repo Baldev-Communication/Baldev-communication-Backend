@@ -73,13 +73,15 @@ test('removed media receipts cannot resurrect deleted objects, and old clients s
 });
 
 const image = Buffer.from('UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AA/vuUAAA=', 'base64');
-async function multipart(token, key, endpoint = '/api/admin/product-drafts/bulk-upload') {
+async function multipart(token, key, endpoint = '/api/admin/product-drafts/bulk-upload', groupDetails) {
   const form = new FormData(); form.append('images', new Blob([image], { type: 'image/webp' }), 'one.webp'); form.append('groupMode', 'single');
+  if (groupDetails) form.append('groupDetails', JSON.stringify(groupDetails));
   const response = await fetch(`${getBaseUrl()}${endpoint}`, { method: 'POST', body: form, headers: { Authorization: `Bearer ${token}`, 'Idempotency-Key': key } });
   return { status: response.status, data: await response.json() };
 }
 test('real draft upload survives insert failure, response loss and deliberate draft deletion', async () => {
   const { token } = await createAdmin(), key = crypto.randomUUID();
+  const details = { 1: { name: 'Manually priced phone', sellingPrice: '99', originalPrice: '129', stock: '2', sku: 'MANUAL-RETRY-1', condition: 'Used', warranty: 'Seller warranty', supplierName: 'Local supplier' } };
   const originalCreate = ProductDraft.create;
   const originalUpload = r2.uploadImageToR2;
   const counter = { calls: 0 };
@@ -87,17 +89,21 @@ test('real draft upload survives insert failure, response loss and deliberate dr
   r2.uploadImageToR2 = async (file, options) => ({ ...await save(counter)(options), originalName: file.originalname });
   try {
     ProductDraft.create = async () => { throw new Error('simulated draft insert failure'); };
-    const failed = await multipart(token, key); assert.equal(failed.status, 500, JSON.stringify(failed.data));
+    const failed = await multipart(token, key, undefined, details); assert.equal(failed.status, 500, JSON.stringify(failed.data));
     ProductDraft.create = originalCreate;
     const created = await request('/api/admin/product-drafts/bulk-upload', { method: 'POST', token, headers: { 'Idempotency-Key': key }, body: { resumeUpload: true } });
     assert.equal(created.status, 201, JSON.stringify(created.data));
+    assert.equal(created.data.data.drafts[0].sellingPrice, 99); assert.equal(created.data.data.drafts[0].stock, 2);
+    assert.equal(created.data.data.drafts[0].attributeValues.condition, 'Used'); assert.equal(created.data.data.drafts[0].supplierName, 'Local supplier');
+    await ProductDraft.findByIdAndUpdate(created.data.data.drafts[0]._id, { $set: { sellingPrice: 109, price: 109, stock: 6 } });
     const replay = await request('/api/admin/product-drafts/bulk-upload', { method: 'POST', token, headers: { 'Idempotency-Key': key }, body: { resumeUpload: true } });
     assert.equal(replay.status, 201, JSON.stringify(replay.data));
     assert.equal(replay.data.data.drafts[0]._id, created.data.data.drafts[0]._id);
+    assert.equal(replay.data.data.drafts[0].sellingPrice, 109); assert.equal(replay.data.data.drafts[0].stock, 6);
     assert.equal(await ProductDraft.countDocuments(), 1); assert.equal(counter.calls, 1);
     assert.equal(created.data.data.drafts[0].uploadOperationId, undefined);
     await ProductDraft.deleteMany({});
-    const removed = await multipart(token, key); assert.equal(removed.status, 409);
+    const removed = await multipart(token, key, undefined, details); assert.equal(removed.status, 409);
     assert.equal(await ProductDraft.countDocuments(), 0); assert.equal(counter.calls, 1);
   } finally { ProductDraft.create = originalCreate; r2.uploadImageToR2 = originalUpload; for (const name of Object.keys(process.env)) if (name.startsWith('R2_')) delete process.env[name]; }
 });

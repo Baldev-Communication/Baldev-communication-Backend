@@ -4,13 +4,14 @@ const Category = require('../models/Category');
 const Store = require('../models/Store');
 const Settings = require('../models/Settings');
 const { Configuration, Listing } = require('../models/Rental');
+const { rentalModuleEnabled, effectiveCommerceMode } = require('../config/commerce');
 const { andFilter, defaultStoreFilter } = require('./storeService');
 const { ApiError } = require('../utils/apiError');
 
 const CARD_FIELDS = '_id slug name category subCategory industry occasion colors tags price originalPrice salePrice saleStartAt saleEndAt stock variants sizingMode sizes images primaryImage rating numReviews commerceMode isNewArrival isBestSeller';
 const FLAGS = 'occasionShoppingEnabled recentlyViewedEnabled completeLookEnabled';
 function publicFilter(req, extra = {}) {
-  return andFilter({ $and: [{ isActive: true, isArchived: { $ne: true } }, { $or: [{ publishAt: { $exists: false } }, { publishAt: null }, { publishAt: { $lte: new Date() } }] }, extra] }, req.tenantFilter);
+  return andFilter({ $and: [{ isActive: true, isArchived: { $ne: true } }, ...(rentalModuleEnabled() ? [] : [{ commerceMode: { $ne: 'RENTAL_ONLY' } }]), { $or: [{ publishAt: { $exists: false } }, { publishAt: null }, { publishAt: { $lte: new Date() } }] }, extra] }, req.tenantFilter);
 }
 function tokens(value) {
   return [...new Map(String(value || '').split(/[,;|]/).map(s => s.trim().replace(/\s+/g, ' ')).filter(s => s && s.length <= 64 && !/[<>\x00-\x1f]/.test(s)).map(s => [s.toLocaleLowerCase('en-IN'), s])).values()].slice(0, 12);
@@ -21,9 +22,9 @@ function ids(value, limit = 12) {
 async function preferences(req) {
   const [settings, rental] = await Promise.all([
     Settings.findOne(req.tenantFilter || {}).select(FLAGS).maxTimeMS(4000).lean(),
-    req.store?._id ? Configuration.findOne({ storeId: req.store._id }).select('mode').maxTimeMS(4000).lean() : null,
+    rentalModuleEnabled() && req.store?._id ? Configuration.findOne({ storeId: req.store._id }).select('mode').maxTimeMS(4000).lean() : null,
   ]);
-  const mode = rental?.mode || req.store?.catalogStructure?.commerce?.mode || 'SALE_ONLY';
+  const mode = effectiveCommerceMode(rental?.mode || req.store?.catalogStructure?.commerce?.mode);
   return { mode, rentalEnabled: mode !== 'SALE_ONLY', occasionShoppingEnabled: settings?.occasionShoppingEnabled !== false, recentlyViewedEnabled: settings?.recentlyViewedEnabled !== false, completeLookEnabled: settings?.completeLookEnabled !== false };
 }
 function catalogModeFilter(mode) { return mode === 'SALE_ONLY' ? { commerceMode: { $ne: 'RENTAL_ONLY' } } : {}; }

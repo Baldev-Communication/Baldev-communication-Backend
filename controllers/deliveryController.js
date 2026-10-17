@@ -56,9 +56,10 @@ exports.details = asyncHandler(async (req, res) => {
     } catch { parcel = null; }
   }
   const data = { shipment: delivery.publicShipment(booking, { customer: !admin }), warning };
+  const localOrder = !returnRequest && order.shippingQuote?.deliveryMethod === 'LOCAL';
   if (!returnRequest) data.order = await Order.findById(order._id).select('orderStatus statusTimeline deliveredAt revision rto.status rto.reason rto.receivedAt rto.refundStatus rto.refundAmount rto.refundDeduction').lean();
   if (admin) data.manualDefaultMode = order.shippingQuote?.fulfillmentMode || settings.manualDeliveryMode || 'COURIER';
-  if (admin) Object.assign(data, { readiness: getShippingProvider(booking?.provider || settings.shippingProvider || 'manual'), selectedProvider: getShippingProvider(settings.shippingProvider || 'manual'), providers: getShippingProviders(settings.shippingProvider || 'manual'), parcel, pickupAddress: settings.shippingPickup, reverse: !!returnRequest && direction !== 'replacement', replacement: direction === 'replacement' });
+  if (admin) Object.assign(data, { localDelivery: localOrder, readiness: getShippingProvider(booking?.provider || (localOrder ? 'manual' : settings.shippingProvider) || 'manual'), selectedProvider: getShippingProvider(localOrder ? 'manual' : settings.shippingProvider || 'manual'), providers: getShippingProviders(settings.shippingProvider || 'manual'), parcel, pickupAddress: settings.shippingPickup, reverse: !!returnRequest && direction !== 'replacement', replacement: direction === 'replacement' });
   else if (data.shipment) {
     for (const key of ['operation', 'operationStartedAt', 'lastError', 'providerCharge', 'providerRef', 'service', 'pickup', 'exceptionActions']) delete data.shipment[key];
   }

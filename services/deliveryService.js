@@ -29,7 +29,9 @@ function publicShipment(row, { customer = false } = {}) {
   }
   return data;
 }
-async function checkoutShipping({ items, settings, address, paymentMethod, amount }) {
+async function checkoutShipping({ items, settings, address, paymentMethod, amount, deliveryMethod }) {
+  const method = require('./localDeliveryService').selectedDeliveryMethod(settings, deliveryMethod);
+  if (method === 'LOCAL') return require('./localDeliveryService').localDeliveryQuote({ settings, address, amount });
   const integrated = isIntegratedProvider(settings.shippingProvider);
   const parcel = integrated || settings.shippingPricingMode === 'weight' ? packageForItems(items, settings) : null;
   if (!integrated) {
@@ -93,6 +95,7 @@ function assertReplacementBookable(request) {
   if (!request.exchangeDeducted || request.exchangeReservationReleased) throw new ApiError('SHIPPING_VALIDATION', 'The replacement inventory reservation is not active.');
 }
 async function createBooking(order, body, returnRequest, direction = 'reverse') {
+  if (!returnRequest && order.shippingQuote?.deliveryMethod === 'LOCAL') throw new ApiError('SHIPPING_VALIDATION', 'This order uses store local delivery. Update its self-delivery progress from Orders.');
   return withOrderLock(order._id, async freshOrder => {
     if (returnRequest && direction === 'replacement') assertReplacementBookable(returnRequest);
     else assertBookable(freshOrder, returnRequest);

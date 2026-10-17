@@ -1,9 +1,13 @@
 const mongoose = require('mongoose');
 const { normalizeIndianMobile } = require('../utils/phoneUtils');
+const { locationPoint } = require('./localDeliveryService');
+const { ApiError } = require('../utils/apiError');
 
 function snapshotAddress(address = {}) {
   const source = address && typeof address === 'object' ? address : {};
   const mobile = normalizeIndianMobile(source.mobile || source.phone);
+  const location = source.location === undefined || source.location === null ? null : locationPoint(source.location);
+  if (source.location !== undefined && source.location !== null && !location) throw new ApiError('VALIDATION_ERROR', 'Choose a valid delivery location on the map.');
   return {
     fullName: String(source.fullName || '').trim(),
     mobile,
@@ -15,6 +19,7 @@ function snapshotAddress(address = {}) {
     area: String(source.area || '').trim(),
     landmark: String(source.landmark || '').trim(),
     addressType: String(source.addressType || 'Home').trim() || 'Home',
+    ...(location ? { location } : {}),
   };
 }
 

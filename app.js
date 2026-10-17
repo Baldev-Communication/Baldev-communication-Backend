@@ -96,6 +96,7 @@ const apiLimiter = rateLimit({
 });
 app.use('/api', apiLimiter);
 
+app.use(['/api/rentals', '/api/admin/rentals', '/api/seller/rentals'], require('./config/commerce').requireRentalModule);
 app.use('/api', optionalProtect);
 app.use('/api/system', require('./routes/clientSystemRoutes'));
 app.use('/api', require('./middleware/externalLicenseMiddleware'));
@@ -116,7 +117,7 @@ app.use('/api/admin/campaigns', protect, adminOnly, optionalResolveStore, requir
 app.use('/api/admin/reviews', protect, adminOnly, optionalResolveStore, requireAdminCustomerStoreAccess, require('./routes/reviewRoutes'));
 app.use('/api/admin/returns', protect, adminOnly, optionalResolveStore, requireAdminCustomerStoreAccess, require('./routes/returnRoutes'));
 app.use('/api/admin/settings', protect, adminOnly, optionalResolveStore, require('./routes/settingsRoutes'));
-app.use('/api/admin/rentals', protect, adminOnly, optionalResolveStore, requireAdminCustomerStoreAccess, require('./routes/rentalRoutes').staffRouter());
+if (require('./config/commerce').rentalModuleEnabled()) app.use('/api/admin/rentals', protect, adminOnly, optionalResolveStore, requireAdminCustomerStoreAccess, require('./routes/rentalRoutes').staffRouter());
 app.use('/api/admin/business', protect, adminOnly, optionalResolveStore, requireAdminCustomerStoreAccess, require('./routes/businessRoutes'));
 app.use('/api/admin/store-content', protect, adminOnly, require('./routes/storeContentRoutes'));
 app.use('/api/admin/customization', protect, adminOnly, require('./routes/websiteCustomizationRoutes'));
@@ -133,7 +134,7 @@ app.get('/api/instagram/oauth/callback', instagram.oauthCallback);
 app.use('/api/analytics', require('./routes/analyticsRoutes'));
 app.use('/api/storefront/home', optionalResolveStore, require('./routes/storefrontHomeRoutes'));
 app.use('/api/products', optionalResolveStore, require('./routes/publicProductRoutes'));
-app.use('/api/rentals', optionalResolveStore, require('./routes/rentalRoutes').customerRouter());
+if (require('./config/commerce').rentalModuleEnabled()) app.use('/api/rentals', optionalResolveStore, require('./routes/rentalRoutes').customerRouter());
 app.use('/api/variant-groups', optionalResolveStore, require('./routes/variantGroupRoutes'));
 app.use('/api/categories', optionalResolveStore, require('./routes/categoryRoutes'));
 app.use('/api/cart', optionalResolveStore, require('./routes/cartRoutes'));

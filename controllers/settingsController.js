@@ -13,7 +13,7 @@ const SETTINGS_PERMISSION_FIELDS = Object.freeze({
   branding: ['storeName', 'brandIdentityEnabled', 'logoUrl', 'faviconUrl', 'tagline', 'seoTitle', 'seoDescription', 'socialShareImage', 'searchIndexingEnabled', 'legalBusinessName', 'gstin', 'invoicePrefix', 'billingAddress'],
   content: ['occasionShoppingEnabled', 'recentlyViewedEnabled', 'completeLookEnabled', 'contactDetailsEnabled', 'announcementEnabled', 'announcementText', 'supportHours', 'invoiceNote', 'contactEmail', 'contactPhone', 'whatsappNumber', 'address', 'footerText', 'returnPolicy', 'privacyPolicy', 'termsConditions', 'shippingPolicy', 'cancellationPolicy', 'sizeGuide', 'faqs', 'ourStory'],
   pricing: ['acceptingOrders', 'orderPauseMessage', 'minimumOrderAmount', 'platformFee', 'gstRate'],
-  shipping: ['shippingProvider', 'manualDeliveryMode', 'shippingPricingMode', 'shippingFreeAboveEnabled', 'shippingDefaultWeightKg', 'shippingLengthCm', 'shippingWidthCm', 'shippingHeightCm', 'shippingVolumetricDivisor', 'shippingWeightStepKg', 'shippingAdditionalStepCharge', 'shippingRateZones', 'shippingPickup', 'freeShippingMinAmount', 'deliveryCharge'],
+  shipping: ['standardDeliveryEnabled', 'localDeliveryEnabled', 'localDeliveryRadiusKm', 'localDeliveryFee', 'localDeliveryFreeAboveEnabled', 'localDeliveryFreeAbove', 'localDeliveryEstimate', 'localDeliveryOrigin', 'shippingProvider', 'manualDeliveryMode', 'shippingPricingMode', 'shippingFreeAboveEnabled', 'shippingDefaultWeightKg', 'shippingLengthCm', 'shippingWidthCm', 'shippingHeightCm', 'shippingVolumetricDivisor', 'shippingWeightStepKg', 'shippingAdditionalStepCharge', 'shippingRateZones', 'shippingPickup', 'freeShippingMinAmount', 'deliveryCharge'],
   payments: ['razorpayEnabled', 'upiEnabled', 'cardPaymentEnabled', 'netBankingEnabled', 'walletEnabled', 'codEnabled', 'codCharge', 'codMinAmount', 'codMaxAmount', 'codPincodes', 'prepaidDiscountType', 'prepaidDiscountValue', 'codConfirmationRequired', 'smartCodVerificationEnabled', 'codRtoRestrictionLimit', 'rtoBlockEnabled', 'rtoBlockMinOrders', 'rtoBlockThreshold', 'rtoRefundDeduction'],
   returns: ['returnsEnabled', 'returnWindowDays', 'refundDeliveryChargeOnFullReturn', 'refundPlatformFeeOnFullReturn', 'refundCodChargeOnFullReturn', 'customerReturnShippingCharge', 'customerRestockingFeePercent', 'exchangeReservationHours', 'returnSlaHours', 'requireProductQrScan', 'requirePackingPhotos', 'requirePackingVideo', 'requireDispatchWeight', 'requireSecuritySeal', 'requireReturnPhotos', 'requireReturnVideo', 'enableSecurityTag', 'enableCustomerRiskDetection', 'autoApproveVerifiedReturns', 'returnWeightToleranceGrams', 'highValueVerificationThreshold'],
   social: ['socialLinks', 'appLinks'],
@@ -22,7 +22,7 @@ const SETTINGS_PERMISSION_FIELDS = Object.freeze({
 exports.getSettings = asyncHandler(async (req, res) => {
   const settings = (await Settings.findOne(req.tenantFilter || {})) || await Settings.create({ ...(req.store?._id ? { storeId: req.store._id } : {}) });
   const data = settings.toObject();
-  if (req.baseUrl === '/api/settings') data.commerceMode = req.store?.catalogStructure?.commerce?.mode || 'SALE_ONLY';
+  if (req.baseUrl === '/api/settings') data.commerceMode = require('../config/commerce').effectiveCommerceMode(req.store?.catalogStructure?.commerce?.mode);
   if ((!req.user || req.user.role !== 'admin') && !req.storeMember) {
     delete data.shippingPickup;
     delete data.shippingRateZones;
@@ -50,6 +50,7 @@ exports.getPaymentMethods = asyncHandler(async (req, res) => {
     codMaxAmount: Number(settings.codMaxAmount || 0) || null,
     codMinAmount: Number(settings.codMinAmount || 0) || null,
     deliveryCharge: Number(settings.deliveryCharge ?? 99),
+    delivery: require('../services/localDeliveryService').publicDeliveryConfig(settings),
     freeShippingMinAmount: Number(settings.freeShippingMinAmount ?? 999),
     platformFee: Number(settings.platformFee ?? 23),
     gstRate: Number(settings.gstRate ?? 5),

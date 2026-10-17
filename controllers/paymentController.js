@@ -220,6 +220,7 @@ async function createPaymentOrder(req, res) {
     userId: req.user?._id,
     shippingAddress,
     tenantFilter: req.tenantFilter,
+    deliveryMethod: req.body?.deliveryMethod,
   });
 
   const amountInPaise = amountToPaise(draft.totals.finalAmount);

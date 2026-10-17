@@ -7,6 +7,7 @@ const WebsiteTheme = require('../models/WebsiteTheme');
 const { asyncHandler } = require('../middleware/validate');
 const { normalizeProductResponse } = require('./productController');
 const { andFilter } = require('../services/storeService');
+const { rentalModuleEnabled, effectiveCommerceMode } = require('../config/commerce');
 
 const SECTION_LIMIT = 12;
 const CATEGORY_LIMIT = 100;
@@ -29,6 +30,7 @@ function publicProductFilter(req, extra = {}) {
   return andFilter({
     $and: [
       { isActive: true, isArchived: { $ne: true } },
+      ...(rentalModuleEnabled() ? [] : [{ commerceMode: { $ne: 'RENTAL_ONLY' } }]),
       { $or: [{ publishAt: { $exists: false } }, { publishAt: null }, { publishAt: { $lte: new Date() } }] },
       extra,
     ],
@@ -241,7 +243,7 @@ exports.getMobileHome = asyncHandler(async (req, res) => {
     collections: compact ? Object.fromEntries(Object.entries(serializedCollections).map(([key, rows]) => [key, rows.map(productKey)])) : serializedCollections,
     categories,
     banners,
-    settings: { ...publicSettings(settings), commerceMode: req.store?.catalogStructure?.commerce?.mode || 'SALE_ONLY', available: !warnings.includes('settings') },
+    settings: { ...publicSettings(settings), commerceMode: effectiveCommerceMode(req.store?.catalogStructure?.commerce?.mode), available: !warnings.includes('settings') },
     warnings: [...new Set(warnings)],
     generatedAt: new Date().toISOString(),
   });

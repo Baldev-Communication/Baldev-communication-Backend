@@ -30,7 +30,7 @@ const storeContent = require('../controllers/storeContentController');
 const { requireAnyStorePermission, requireStoreFeature, requireStorePermission, stripClientStoreId } = require('../middleware/storeMiddleware');
 
 // Returning existing rentals must remain possible when new writes are paused.
-router.use('/rentals', require('./rentalRoutes').staffRouter());
+if (require('../config/commerce').rentalModuleEnabled()) router.use('/rentals', require('./rentalRoutes').staffRouter());
 router.use('/settings/traffic', require('./trafficSettingsRoutes'));
 router.use('/smart-fill', require('./workflowSmartFillRoutes'));
 

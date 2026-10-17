@@ -25,6 +25,9 @@ const testInstallationId = 'automated-test-installation';
 const testLicenseKeys = crypto.generateKeyPairSync('ed25519');
 Object.assign(process.env, {
   NODE_ENV: 'test',
+  // Existing optional-module suites exercise the legacy module explicitly.
+  // Sales-only deployment tests override this with false.
+  ENABLE_RENTAL_MODULE: 'true',
   CONTROL_PLANE_URL: 'http://127.0.0.1:1',
   CLIENT_INSTALLATION_ID: testInstallationId,
   CLIENT_LICENSE_KEY: 'automated-test-key',

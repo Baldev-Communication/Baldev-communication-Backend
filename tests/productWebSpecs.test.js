@@ -33,6 +33,26 @@ function grounded(lines, cited = lines.map((_, index) => index)) {
   return { text, groundingMetadata: { groundingChunks: [{ web: { uri, title: 'Manufacturer specs' } }], groundingSupports: supports } };
 }
 
+test('appliance identity and cited specifications use the selected template and preserve TV screen keys', () => {
+  const { DEFAULT_STRUCTURE } = require('../config/industryPresets');
+  const { configuredAttributes } = require('../services/productAttributes');
+  for (const [key, name, spec, value, unit] of [
+    ['televisions', 'Sony KD-43X75L', 'screen_size', '43', 'in'],
+    ['washing_machines', 'LG FHM1207SDM', 'wash_capacity', '7', 'kg'],
+    ['pressure_cookers', 'Prestige Popular 5L', 'capacity_litres', '5', 'l'],
+    ['mixer_grinders', 'Philips HL7756', 'power_consumption', '750', 'W'],
+    ['irons', 'Bajaj DX6', 'power_consumption', '1000', 'W'],
+  ]) {
+    const configured = configuredAttributes(DEFAULT_STRUCTURE, [{ _id: 'cat', definitionKey: key }], { category: 'cat' });
+    const identity = modelIdentity({ existing: { name }, attributes: configured });
+    assert.equal(identity?.kind, 'electronics', name);
+    assert.equal(identity.model, name);
+    const result = normalizeGroundedSpecs(grounded([`model: ${name}`, `${spec}: ${value} ${unit}`, 'ram: 8 GB']), identity, configured);
+    assert.equal(result.suggestion.attributeValues[spec], value, name);
+    assert.equal(result.suggestion.attributeValues.ram, undefined, name);
+  }
+});
+
 test('model and GB variant come from configured form attributes', () => {
   assert.deepEqual(modelIdentity({ existing: { name: 'Samsung Galaxy A15', attributeValues: { model: 'Galaxy A15 5G', ram: '8', storage: '128' } }, attributes }), { model: 'Galaxy A15 5G', ram: '8', storage: '128' });
   assert.deepEqual(modelIdentity({ existing: { name: 'Samsung Galaxy A15 5G 8/128GB' }, attributes }), { model: 'Samsung Galaxy A15 5G', ram: '8', storage: '128' });

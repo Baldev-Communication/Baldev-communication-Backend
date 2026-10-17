@@ -4,6 +4,7 @@ const User = require('../models/User');
 const { normalizeProductImages } = require('../utils/imageUtils');
 const { andFilter } = require('../services/storeService');
 const { asyncHandler } = require('../middleware/validate');
+const { rentalModuleEnabled } = require('../config/commerce');
 
 function unavailable(id) {
   return { _id: String(id), id: String(id), name: 'This product is no longer available', images: [], isActive: false, unavailable: true, stock: 0 };
@@ -17,6 +18,7 @@ async function resolveProducts(values, req) {
   const products = await Product.find(andFilter({
     $or: [{ _id: { $in: objectIds } }, { slug: { $in: slugs } }],
     isActive: { $ne: false }, isArchived: { $ne: true },
+    ...(!rentalModuleEnabled() ? { commerceMode: { $ne: 'RENTAL_ONLY' } } : {}),
   }, req.tenantFilter)).populate('category', 'name slug');
   const lookup = new Map();
   products.forEach(product => { lookup.set(String(product._id), product); lookup.set(product.slug, product); });
